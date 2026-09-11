@@ -2,7 +2,7 @@
 
 Team: Samouil Mosios, Pavlos Spanoudakis
 Course: DD2482 DevOps, project task — deadline **2026-10-11, 23:59 Stockholm time**
-Proposal on record: `contributions/project/mosios-spanoudakis/README.md` in the course fork (`sm-ps-devops-course`, `project` branch)
+Proposal on record: `contributions/project/samouil-pavloss/README.md` in the course fork (`sm-ps-devops-course`, `2026` branch — renamed from `mosios-spanoudakis` by Pavlos to use KTH ids)
 This repo: `dd2482-project` (`main` branch) — the actual implementation artifact
 
 This is a working plan for standing up the cluster, not the implementation itself. Lives in its own dedicated repo (moved here from the course fork's `project` branch, where it originally lived alongside the proposal before this repo existed) — the course fork holds just the proposal, to be updated with a link back here per the hand-in rule.
