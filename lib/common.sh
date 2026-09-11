@@ -1,0 +1,175 @@
+#!/usr/bin/env bash
+# Shared config and helpers, sourced by every script in this chain.
+set -euo pipefail
+
+PREFIX="dokploy"
+CP_NAME="${PREFIX}-control-plane"
+WORKER_PREFIX="${PREFIX}-worker"
+
+WORKERS="${WORKERS:-2}"
+CPUS="${CPUS:-2}"
+MEM="${MEM:-2G}"
+DISK="${DISK:-10G}"
+IMAGE="${IMAGE:-24.04}"
+
+DOKPLOY_PORT=3000
+API_KEY_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.dokploy-api-key"
+
+require() {
+  for cmd in "$@"; do
+    command -v "$cmd" >/dev/null 2>&1 || { echo "missing required command: $cmd" >&2; exit 1; }
+  done
+}
+
+worker_name() { echo "${WORKER_PREFIX}-$1"; }
+
+env_file_value() {
+  # env_file_value <file> <key> - extract KEY=value from a simple env file
+  # WITHOUT sourcing/executing it. A strong random password can easily
+  # contain shell-special characters ($, !, `, etc.) - `source`-ing the
+  # file would let bash try to interpret those instead of treating the
+  # value as plain text. Only strips one layer of matching "..."/'...'
+  # quoting; anything unquoted is taken literally as-is.
+  local file="$1" key="$2" line val
+  line="$(grep -E "^${key}=" "$file" | tail -n1)" || return 1
+  val="${line#*=}"
+  if [[ "$val" == \"*\" && "$val" == *\" ]]; then
+    val="${val#\"}"; val="${val%\"}"
+  elif [[ "$val" == \'*\' && "$val" == *\' ]]; then
+    val="${val#\'}"; val="${val%\'}"
+  fi
+  echo "$val"
+}
+
+host_cpus() {
+  nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 0
+}
+
+host_mem_gb() {
+  if command -v free >/dev/null 2>&1; then
+    free -g | awk '/^Mem:/{print $2}'
+  else
+    local bytes
+    bytes="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
+    echo $(( bytes / 1024 / 1024 / 1024 ))
+  fi
+}
+
+suggest_max_workers() {
+  # Rough advisory estimate only - real headroom depends on what else is
+  # running on the host. Reserves 2 cores / 2GB for the host OS on top of
+  # what the (already-running) control plane itself needs, then divides
+  # what's left by one worker's CPU/mem footprint.
+  local cpus mem_gb cpu_per_vm="$CPUS" mem_per_vm="${MEM%[Gg]}"
+  cpus="$(host_cpus)"
+  mem_gb="$(host_mem_gb)"
+  [[ "$cpus" -gt 0 && "$mem_gb" -gt 0 ]] || { echo "?"; return; }
+
+  local usable_cpus=$(( cpus - 2 - cpu_per_vm ))
+  local usable_mem=$(( mem_gb - 2 - mem_per_vm ))
+  local by_cpu=$(( cpu_per_vm > 0 ? usable_cpus / cpu_per_vm : 0 ))
+  local by_mem=$(( mem_per_vm > 0 ? usable_mem / mem_per_vm : 0 ))
+  local max=$(( by_cpu < by_mem ? by_cpu : by_mem ))
+  (( max < 0 )) && max=0
+  echo "$max"
+}
+
+launch_vm() {
+  # Shared by the control-plane and worker launch scripts: launch (unless it
+  # already exists) and block until cloud-init is done.
+  local name="$1"
+  if vm_exists "$name"; then
+    echo "== $name already exists, skipping launch"
+  else
+    echo "== launching $name (cpus=$CPUS mem=$MEM disk=$DISK image=$IMAGE)"
+    multipass launch "$IMAGE" --name "$name" --cpus "$CPUS" --memory "$MEM" --disk "$DISK"
+  fi
+  echo "== waiting for cloud-init on $name"
+  wait_for_cloudinit "$name"
+  echo "== $name ready at $(vm_ip "$name")"
+}
+
+with_timeout() {
+  # Portable stand-in for GNU `timeout` (not present by default on macOS,
+  # and coreutils isn't a dependency we want to require). Runs "$@",
+  # prints its combined output, returns its exit code, or 124 on timeout.
+  local secs="$1" tmp pid i=0; shift
+  tmp="$(mktemp)"
+  ( "$@" >"$tmp" 2>&1 ) &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( i >= secs )); then
+      kill -9 "$pid" 2>/dev/null
+      cat "$tmp"; rm -f "$tmp"
+      return 124
+    fi
+    sleep 1; ((i++))
+  done
+  wait "$pid"; local rc=$?
+  cat "$tmp"; rm -f "$tmp"
+  return $rc
+}
+
+vm_exists() { multipass info "$1" >/dev/null 2>&1; }
+
+ensure_docker() {
+  # Only the control plane gets Docker via the Dokploy installer - workers
+  # are bare Ubuntu VMs and need it installed before they can run
+  # `docker swarm join`. `multipass exec` has been observed to hang on
+  # trivial commands too (not just `cloud-init status --wait`), so this is
+  # wrapped in the same timeout as wait_for_cloudinit rather than trusted bare.
+  local name="$1"
+  if with_timeout 15 multipass exec "$name" -- bash -c 'command -v docker' >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "  installing docker on $name"
+  multipass exec "$name" -- sudo bash -c 'curl -fsSL https://get.docker.com | sh'
+}
+
+vm_ip() {
+  # first IPv4 line multipass reports for the instance
+  multipass info "$1" --format csv 2>/dev/null | tail -n1 | cut -d',' -f3
+}
+
+wait_for_cloudinit() {
+  # `cloud-init status --wait` over `multipass exec` has been observed to hang
+  # indefinitely (transport-level, not cloud-init itself - plain `cloud-init
+  # status` returns instantly even while `--wait` is stuck). Poll the
+  # non-blocking form instead, each call capped with `timeout` so one flaky
+  # exec can't block the whole chain.
+  local name="$1" attempt out
+  for attempt in $(seq 1 40); do
+    if out="$(with_timeout 15 multipass exec "$name" -- cloud-init status)"; then
+      [[ "$out" == *"status: done"* ]] && return 0
+    fi
+    echo "  ($name cloud-init: ${out:-exec not ready yet}, retry $attempt/40)" >&2
+    sleep 5
+  done
+  echo "gave up waiting for cloud-init on $name" >&2
+  return 1
+}
+
+dokploy_port_open() {
+  curl -s -o /dev/null -m 2 "http://${1}:${DOKPLOY_PORT}"
+}
+
+dokploy_api_key() {
+  if [[ -n "${DOKPLOY_API_KEY:-}" ]]; then
+    echo "$DOKPLOY_API_KEY"
+  elif [[ -f "$API_KEY_FILE" ]]; then
+    cat "$API_KEY_FILE"
+  else
+    echo "no Dokploy API key found (set DOKPLOY_API_KEY or run 01-dokploy-api-key.sh --api-key <key>)" >&2
+    exit 1
+  fi
+}
+
+dokploy_api() {
+  # dokploy_api <cp_ip> <endpoint> [extra curl args...]
+  # -f: without this, curl exits 0 on any HTTP response including 401/403/5xx
+  # (only transport-level failures count), so a rejected/expired API key
+  # would silently read as "success" to every caller checking the exit code.
+  local ip="$1" endpoint="$2"; shift 2
+  curl -sSf -H "x-api-key: $(dokploy_api_key)" \
+    "http://${ip}:${DOKPLOY_PORT}/api/${endpoint}" "$@"
+}

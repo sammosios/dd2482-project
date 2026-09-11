@@ -1,0 +1,112 @@
+# Self-Hosted PaaS Cluster with Dokploy — Setup Plan
+
+Team: Samouil Mosios, Pavlos Spanoudakis
+Course: DD2482 DevOps, project task — deadline **2026-10-11, 23:59 Stockholm time**
+Proposal on record: `contributions/project/mosios-spanoudakis/README.md` in the course fork (`sm-ps-devops-course`, `project` branch)
+This repo: `dd2482-project` (`main` branch) — the actual implementation artifact
+
+This is a working plan for standing up the cluster, not the implementation itself. Lives in its own dedicated repo (moved here from the course fork's `project` branch, where it originally lived alongside the proposal before this repo existed) — the course fork holds just the proposal, to be updated with a link back here per the hand-in rule.
+
+## Goal
+
+A reproducible-from-clean-state cluster: Multipass VMs → Docker Swarm → Dokploy on top, driven by a chain of scripts, with the node count parameterized (1 control plane + N workers). There's a `bootstrap.sh` entrypoint (see Script chain), but it's honest about not always being one command — see the note on the credential-bootstrap step below.
+
+## Architecture
+
+```
+multipass VM: control-plane     multipass VM: worker-1   worker-2 ... worker-N
+  Dokploy installed here           docker install +         docker install +
+  (install bootstraps              docker swarm join        docker swarm join
+   docker swarm init                (join command from        (join command from
+   automatically)                   Dokploy's                 Dokploy's
+  manages deployments as            cluster.addWorker API)     cluster.addWorker API)
+  swarm services across
+  all nodes
+```
+
+- **Multipass** provisions the VMs (Ubuntu instances) — this is the base reproducibility layer.
+- **Dokploy** is installed on the control-plane node first; its installer runs `docker swarm init` itself, so we don't bootstrap the swarm manually.
+- **Worker join uses Dokploy's built-in function**, not a manual `docker swarm init`/token dance on our side: Dokploy exposes `GET /cluster.addWorker` (source: `apps/dokploy/server/api/routers/cluster.ts`), which returns the actual `docker swarm join --token ... <ip>:2377` command. We call that (via the Dokploy API) once per worker and run the returned command on that worker VM via `multipass exec`.
+- **Confirmed fix for a known upstream bug** (Dokploy#4517, IP in the generated join command can be wrong): rather than conditionally patching it, we always rebuild the join command against the control plane's real Multipass IP and just log when they didn't match.
+- Confirmed `cluster.addWorker` works generically, no `serverId`/pre-registration needed for our flow.
+- **Why not Dokploy's "Remote Servers" SSH auto-provisioning?** Dokploy does have an SSH-based feature that installs Docker on a fresh box for you, but it's for a different topology: each Remote Server runs its own *independent* Docker + Traefik and explicitly does not join a cluster. That's not what we want here — we want workers joining the control plane's Docker Swarm, which is the separate "Cluster" feature (`cluster.addWorker`).
+- Multipass VMs sit on their own private virtual network (host + all VMs mutually reachable by IP, e.g. `192.168.252.x` on macOS's default driver) — this is why the IP rebuild above matters: the join command needs to point workers at the control-plane's actual Multipass-assigned IP.
+
+### Credential bootstrap — automated, not just manual
+
+Dokploy has no documented public API for creating its first admin account or API key (confirmed via upstream feature request [Dokploy#3470](https://github.com/Dokploy/dokploy/issues/3470) and discussion [#2648](https://github.com/Dokploy/dokploy/discussions/2648) — this is a genuine platform gap). Rather than requiring a browser click every time (or reaching for Selenium/a webdriver, which would've meant a whole new cross-platform dependency chain — relevant given the WSL2 networking notes below), `01-dokploy-api-key.sh` reverse-engineers what Dokploy's own UI and its own CI integration tests (`upgrade-integration-test.yml` in the Dokploy repo) do under the hood, all plain `curl`:
+
+1. `POST /api/auth/sign-up/email` — creates the first admin, returns a session cookie (better-auth; confirmed via Dokploy's own CI script comment: "allowed only before any owner exists").
+2. If an owner already exists (e.g. re-running after someone created it manually), `POST /api/auth/sign-in/email` instead.
+3. `GET /api/trpc/organization.all` — get the new admin's organization id (required by step 4).
+4. `POST /api/trpc/user.createApiKey` — generate a real API key from the session; response's `.result.data.json.key` is the token our other scripts use via `x-api-key`.
+
+Credentials come from `.dokploy-admin.env` (gitignored; copy from `.dokploy-admin.env.example`). If that file doesn't exist, the script falls back to printing manual browser instructions — so it still works without it, just not headlessly. This is undocumented, could break on a Dokploy update, and that's an accepted tradeoff.
+
+**Bugs found while building this** (all real, all would silently break the automation):
+- `dokploy_api()` in `lib/common.sh` originally used plain `curl -sS`, which returns exit code 0 on *any* HTTP response including 401/403 (only transport failures count as curl errors) — so a rejected API key read as "verified" everywhere the exit code was checked. Fixed by adding `-f` (`curl -sSf`), confirmed via a real stale-key test that it now correctly fails instead of false-passing.
+- `user.createApiKey` needs `rateLimitEnabled` passed explicitly — omitting it (as the field being merely "optional" in the schema implies it should be safe to do) silently inherits better-auth's api-key plugin default of **rate limiting enabled, 10 requests/24h**, which broke the provisioning key after about 10 calls during testing. Explicitly set to `false` now, since this key needs to drive the whole automation over the cluster's lifetime, not just a handful of clicks.
+- `auto_provision()` originally `source`d `.dokploy-admin.env` directly to load the three admin vars — meaning the file was executed as bash, not read as data. A genuinely strong random password (exactly what you should use) can easily contain shell-special characters (`$`, `!`, `` ` ``), which `source` tries to interpret instead of treating as plain text — hit this for real with a password containing `$!`, which bash parsed as "PID of last background job" and failed with "unbound variable". Fixed by parsing the file as data instead (`env_file_value()` in `lib/common.sh`, plain `grep`/quote-stripping, no shell evaluation of the content).
+- Missing values in `.dokploy-admin.env` were originally caught via `: "${VAR:?}"`, which does work but aborts with bash's generic "parameter null or not set" error rather than saying which file or which value — replaced with an explicit check that names exactly what's missing and points at `.dokploy-admin.env.example`.
+
+## Script chain
+
+Each phase is a separate, idempotent script that can be run on its own, plus a `bootstrap.sh` entrypoint that chains them. `bootstrap.sh` is honest about the one thing it can't paper over: without `.dokploy-admin.env` present, `01`'s credential step is still a real manual step, so `bootstrap.sh` stops cleanly with next-step instructions rather than claiming to have finished the cluster.
+
+The phase split follows node role, not just "infra vs. auth": `00` gets the control plane fully ready (VM + Dokploy — `docker swarm init` happens as part of Dokploy's own installer). `01` is the credential handshake, no provisioning of its own — asserts Dokploy is already reachable (points back to `00` if not). `02` launches worker VMs *and* joins each one to the swarm in one pass per worker, not "launch all, then join all" — so `02` alone is "scale the cluster by N workers" against an already-running control plane, matching the proposal's claim that new VMs can join and scale horizontally on demand.
+
+- [x] `00-launch-cp-vm.sh` — launches the control-plane VM (CPU/mem/disk as parameters), waits for cloud-init, then installs Dokploy on it. Idempotent — skips the VM launch if it exists, skips the Dokploy install if it's already responding.
+- [x] `01-dokploy-api-key.sh` — asserts Dokploy is already up (points back to `00` if not). Auto-provisions the admin account + API key via `.dokploy-admin.env` if present (see "Credential bootstrap" above); otherwise prints manual browser instructions, resumed via `--api-key <token>`. Either way, ends by verifying the key against `cluster.getNodes`.
+- [x] `02-launch-worker-vms.sh` — for each worker: launches the VM (skips if it exists), installs Docker (skips if already present), checks `docker info`'s `Swarm.LocalNodeState` and skips the join entirely if already `active` (this idempotency guard is a real fix — earlier versions would hit Docker Swarm's "already part of a swarm" error on any re-run against existing workers), otherwise fetches the join command from `cluster.addWorker`, rebuilds it against the control plane's real IP, and joins. Verifies via `docker node ls` at the end.
+  - **Known limitation, scaling down**: this only ever loops `1..N` — re-running `bootstrap.sh`/`02` with a *lower* worker count than what's already running does not remove the extras (e.g. 3 workers up, run with `--workers 2`, worker-3 is simply left alone). Scaling up works and is verified (confirmed live: re-running against a growing worker count joins new nodes cleanly without touching existing ones). Scaling down would need real logic on the way out, not just skip-if-exists on the way in — drain the extra node in the swarm first, then `docker node rm` it, then `multipass delete` the VM. Not needed yet, noted for later.
+- [x] `03-deploy-core-services.sh` — stub only; drives the Dokploy CLI/API to deploy the baseline service set, but the actual service list/config isn't decided yet (see Core services below), so this currently just prints TODOs and confirms API connectivity.
+- [x] `teardown.sh` — `multipass delete --purge` for all instances tagged by this project, for clean-slate reproducibility testing. Prompts for confirmation unless run with `-y`.
+- [x] `bootstrap.sh` — chains 00→03. Worker count is mandatory: pass it (`./bootstrap.sh 3` or `./bootstrap.sh --workers 3`) or get prompted, with a rough estimate of how many workers this device could handle (`host_cpus`/`host_mem_gb`/`suggest_max_workers` in `lib/common.sh` — detects host CPU/RAM via `nproc`/`sysctl`, reserves ~2 cores/2GB for the host OS on top of what the control plane itself needs, divides the rest by one worker's footprint). Stops with clear instructions if `01` hits the manual credential step (see above) rather than pretending to finish.
+
+Usage is either the individual scripts in order — `./00-launch-cp-vm.sh` (VM + Dokploy up) → `./01-dokploy-api-key.sh` (auto-provisions if `.dokploy-admin.env` exists, else pauses for the manual step, resumed with `--api-key <token>`) → `./02-launch-worker-vms.sh [--workers N]` → `./03-deploy-core-services.sh` — or `./bootstrap.sh [--workers N]` to chain all of it.
+
+Scripts live at the repo root (plus `lib/common.sh` for shared config/helpers). `00`–`02` and `bootstrap.sh` are verified working end-to-end against a real cluster, from a genuinely fresh Multipass/Dokploy instance (no prior admin account, no stale local state) through to `docker node ls` showing every node `Ready`/`Active` — including re-running `00`, `01`, and `02` (individually and via `bootstrap.sh`, and with mixed state — some workers already joined, one brand new, in the same invocation) to confirm all three stay idempotent. Bugs found and fixed along the way:
+- `multipass exec` has been observed to hang indefinitely on more than one command (`cloud-init status --wait` originally, then a plain `command -v docker` check in `ensure_docker` during idempotency testing) — transport-level, not the remote command itself (a non-`--wait` retry of the same check returns instantly). Every bare `multipass exec` call driving a decision (`wait_for_cloudinit`, `ensure_docker`, `already_joined`) is now wrapped in a pure-bash timeout helper (`with_timeout` in `lib/common.sh`, since macOS has no `timeout`/`gtimeout` by default) so one flaky call can't block the whole chain.
+- Dokploy's install script accepts `ADVERTISE_ADDR`; `00-launch-cp-vm.sh` pins it to the control plane's real Multipass IP at install time, preventing the #4517 join-IP bug at the source (on top of `02` also always rebuilding the join command defensively).
+- See "Credential bootstrap" above for the two auth-related bugs (missing `curl -f`, missing `rateLimitEnabled: false`).
+- `teardown.sh` deleted the VMs but left `.dokploy-api-key` behind — since that key is tied to the specific Dokploy instance that issued it, `01-dokploy-api-key.sh`'s next run against a rebuilt control plane would find the stale file, try to verify it, get a 401, and fail instead of cleanly re-provisioning. Now removes it as part of teardown (`.dokploy-admin.env` is left alone — those are reusable admin credentials, not instance-specific).
+- Iterated through three different phase splits before this one: first a single `00` did everything (all VMs + Dokploy install), then Dokploy's install got merged in with a separate `01` purely for credentials, then finally `00`'s worker-launching moved into `02` alongside the join logic once we realized "launch all workers, then join all workers" as two separate passes didn't match how you'd actually want to scale the cluster later. Each step removed either branchy conditional logic or an artificial two-pass split — worth the churn.
+
+`03-deploy-core-services.sh` (the actual service deployments) is still just a stub — see "Immediate next steps".
+
+## Core services (from the proposal)
+
+- [ ] Self-hosted CI runner(s)
+- [ ] Example web application (deployed via Dokploy to prove the PaaS flow end-to-end)
+- [ ] Database service
+- [ ] Secrets vault
+- [ ] Trivy scanning wired into image/dependency checks
+
+Nice-to-have if time permits: object storage, message queue, observability stack (metrics/logs/tracing).
+
+## Reproducibility validation
+
+- [ ] Define "clean state" precisely (no leftover Multipass instances, no stale swarm join tokens) and script a check for it.
+- [x] Ran the full sequence (00 → 01 → 02) against a genuinely fresh Multipass/Dokploy instance (no prior admin account) with `.dokploy-admin.env` set — fully automated, no manual browser step needed. Re-ran `00`/`01`/`02` again against the already-running cluster and confirmed all three are idempotent (including the new already-joined guard in `02`). This is the core evidence for the "reproducible from clean state" claim in the proposal.
+- [ ] Still to validate: a true `teardown.sh` → rebuild cycle end-to-end in one sitting (done so far across separate rebuilds, not one continuous test), and `03` once it's more than a stub.
+- [ ] Document actual timings (VM boot, swarm join, Dokploy install, service deploy) — useful both for the writeup and for sizing seminar demo time.
+
+## Host OS notes
+
+- **macOS** (Sam's dev machine): verified working. Multipass uses `vmnet-shared`, VMs get IPs like `192.168.252.x`, host and VMs mutually reachable directly.
+- **WSL2** (if Pavlos runs from Windows): script logic is plain POSIX bash and should run fine as-is, but there's a real networking gap to watch for. `00-launch-cp-vm.sh`, `01-dokploy-api-key.sh`, and `02-launch-worker-vms.sh` all `curl` directly from the host shell to the VM's IP (`dokploy_port_open()`, `dokploy_api()`, plus 01's raw sign-up/sign-in/tRPC calls), not just through `multipass exec`. Multipass-on-Windows runs VMs on Hyper-V's "Default Switch," and WSL2's default NAT networking mode has no route to that subnet — there's even an open upstream bug where WSL2 misroutes traffic meant for it to the wrong interface ([microsoft/WSL#11034](https://github.com/microsoft/WSL/issues/11034)). WSL2's "mirrored" networking mode fixes the routing but adds its own Hyper-V firewall interaction. Practical options if this bites:
+  1. Run Multipass and these scripts from a native Windows bash environment (e.g. Git Bash) instead of WSL — sidesteps the WSL network-namespace boundary entirely.
+  2. If WSL specifically is wanted, enable mirrored networking mode first, then verify `curl http://<control-plane-ip>:3000` from the WSL shell *before* running the full chain, not after — cheap check, would've saved real time during the macOS debugging session that led to this note.
+
+## Open questions to settle with Pavlos
+
+- [ ] Host machine choice for running Multipass during dev/demo (one person's laptop vs. both testing independently) — decide before scripts hardcode any host-specific assumptions.
+- [ ] Each of us needs our own `.dokploy-admin.env` locally (gitignored, not shared) — fine as-is, just flagging so it's not a surprise that it's not in the repo.
+- [ ] Split of ownership: suggest Sam owns 00–02 (Multipass/Dokploy-install/join layer), Pavlos owns 03 (services layer), both pair on teardown/reproducibility validation and the writeup.
+
+## Immediate next steps
+
+1. [x] Set up the repo — started life in the course fork's `project` branch, then moved into this dedicated repo (`dd2482-project`) once it existed.
+2. [x] Built and verified `00-launch-cp-vm.sh` + `01-dokploy-api-key.sh` + `02-launch-worker-vms.sh` end-to-end from a genuinely clean state, fully automated (no manual browser step), all three confirmed idempotent on re-run.
+3. [ ] Layer in one trivial service deploy via Dokploy to validate the chain end-to-end before building out the core service set.
+4. [ ] Once the artifact is real, open the hand-in PR updating the proposal doc with a link here.
