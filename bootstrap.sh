@@ -55,6 +55,13 @@ echo "== spinning up control plane + $WORKERS worker(s)"
 
 ./00-launch-cp-vm.sh --cpus "$CPUS" --mem "$MEM" --disk "$DISK"
 
+# forward.sh is a gitignored, WSL-only local helper (see the script itself)
+# - run it if present, so Dokploy is reachable from Windows before 01 needs
+# the browser. Not fatal: the cluster itself is fine without it.
+if [[ -x ./forward.sh ]]; then
+  ./forward.sh || echo "== warning: ./forward.sh failed, Dokploy is not forwarded to localhost" >&2
+fi
+
 if ! ./01-dokploy-api-key.sh; then
   echo
   echo "== stopped: credential bootstrap needs one more step (see instructions above)"

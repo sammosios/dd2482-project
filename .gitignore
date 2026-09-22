@@ -1,2 +1,4 @@
 .dokploy-api-key
 .dokploy-admin.env
+forward.sh
+.forward.pid

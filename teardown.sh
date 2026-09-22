@@ -13,6 +13,7 @@ ASSUME_YES=0
 mapfile -t names < <(multipass list --format csv | awk -F, -v p="$PREFIX" 'NR>1 && $1 ~ "^"p"-" {print $1}')
 
 if [[ ${#names[@]} -eq 0 ]]; then
+  stop_forwarder
   echo "== no ${PREFIX}-* VMs found, nothing to tear down"
   exit 0
 fi
@@ -24,6 +25,11 @@ if [[ "$ASSUME_YES" -ne 1 ]]; then
 fi
 
 multipass delete --purge "${names[@]}"
+
+# Only does anything if forward.sh (gitignored, WSL-only) ever started a
+# forwarder - which would otherwise keep holding its port, pointed at a
+# control-plane IP that no longer exists.
+stop_forwarder
 
 # The API key is tied to the specific Dokploy instance that issued it - once
 # its control-plane VM is gone, the key is dead weight that just causes

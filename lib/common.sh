@@ -14,6 +14,9 @@ IMAGE="${IMAGE:-24.04}"
 
 DOKPLOY_PORT=3000
 API_KEY_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.dokploy-api-key"
+# Written by forward.sh (a gitignored, WSL-only helper). Defined here rather
+# than in forward.sh so teardown.sh can stop a forwarder without it.
+FORWARD_PID_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.forward.pid"
 
 require() {
   for cmd in "$@"; do
@@ -172,4 +175,18 @@ dokploy_api() {
   local ip="$1" endpoint="$2"; shift 2
   curl -sSf -H "x-api-key: $(dokploy_api_key)" \
     "http://${ip}:${DOKPLOY_PORT}/api/${endpoint}" "$@"
+}
+
+stop_forwarder() {
+  # No-op unless forward.sh has started one. Only kills the PID if it's
+  # still socat, so a stale file can't take out an unrelated process that
+  # has since reused the PID.
+  [[ -f "$FORWARD_PID_FILE" ]] || return 0
+  local pid
+  pid="$(cat "$FORWARD_PID_FILE")"
+  if [[ "$(ps -p "$pid" -o comm= 2>/dev/null)" == socat ]]; then
+    kill "$pid"
+    echo "== stopped localhost forwarder (pid $pid)"
+  fi
+  rm -f "$FORWARD_PID_FILE"
 }
