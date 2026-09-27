@@ -12,7 +12,7 @@
 #
 # Usage:
 #   ./bootstrap.sh 3                                  # 3 workers
-#   ./bootstrap.sh --workers 3 [--cpus N] [--mem SIZE] [--disk SIZE]
+#   ./bootstrap.sh --workers 3 [--cpus N] [--mem SIZE] [--disk SIZE] [--cp-disk SIZE]
 #   ./bootstrap.sh                                    # prompts for worker count
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -28,6 +28,7 @@ while [[ $# -gt 0 ]]; do
     --cpus) CPUS="$2"; shift 2 ;;
     --mem) MEM="$2"; shift 2 ;;
     --disk) DISK="$2"; shift 2 ;;
+    --cp-disk) CP_DISK="$2"; shift 2 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
 done
@@ -53,7 +54,7 @@ fi
 
 echo "== spinning up control plane + $WORKERS worker(s)"
 
-./00-launch-cp-vm.sh --cpus "$CPUS" --mem "$MEM" --disk "$DISK"
+./00-launch-cp-vm.sh --cpus "$CPUS" --mem "$MEM" --disk "$CP_DISK"
 
 # forward.sh is a gitignored, WSL-only local helper (see the script itself)
 # - run it if present, so Dokploy is reachable from Windows before 01 needs
@@ -71,6 +72,7 @@ if ! ./01-dokploy-api-key.sh; then
 fi
 
 ./02-launch-worker-vms.sh --workers "$WORKERS" --cpus "$CPUS" --mem "$MEM" --disk "$DISK"
-./03-deploy-core-services.sh
+./03-setup-registry.sh
+./04-deploy-core-services.sh
 
 echo "== cluster up: $((WORKERS + 1)) nodes"

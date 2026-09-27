@@ -2,3 +2,4 @@
 .dokploy-admin.env
 forward.sh
 .forward.pid
+.registry-credentials

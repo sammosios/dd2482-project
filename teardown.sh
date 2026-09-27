@@ -42,4 +42,11 @@ if [[ -f "$API_KEY_FILE" ]]; then
   echo "== removed stale $API_KEY_FILE"
 fi
 
+# Same reasoning: the registry and its htpasswd config died with the
+# control plane, so the next 03-setup-registry.sh generates fresh ones.
+if [[ -f "$REGISTRY_CREDS_FILE" ]]; then
+  rm -f "$REGISTRY_CREDS_FILE"
+  echo "== removed $REGISTRY_CREDS_FILE"
+fi
+
 echo "== teardown complete"
