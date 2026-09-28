@@ -6,3 +6,4 @@ forward.sh
 .github-runner.env
 .openbao-init.json
 .openbao-init.json.stale
+.web-app-credentials

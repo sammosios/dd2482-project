@@ -20,7 +20,6 @@ dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null \
 echo "== core service deployment not yet implemented, see PLAN.md 'Core services'"
 echo "   (docker registry: see 03-setup-registry.sh)"
 echo "   (CI runners: see 04-setup-ci-runner.sh)"
-echo "   TODO: full-stack web application"
 echo "   TODO: Trivy scanning"
 echo "   (secrets vault: see 05-setup-openbao.sh, APP-PROJECT-SETUP.md)"
 echo "== other services tbi:"
