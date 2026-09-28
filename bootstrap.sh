@@ -87,6 +87,6 @@ fi
 
 ./05-setup-openbao.sh
 ./06-deploy-core-services.sh
-./06-deploy-web-app.sh
+./07-deploy-web-app.sh
 
 echo "== cluster up: $((WORKERS + 1)) nodes, with the Roster web app deployed"

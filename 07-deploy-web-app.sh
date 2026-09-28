@@ -20,7 +20,7 @@
 # Redis and app set up by hand under the same names), skips the build when the
 # registry already has the image, and only redeploys when a setting changed
 # or the app isn't running that image.
-# Usage: ./06-deploy-web-app.sh
+# Usage: ./07-deploy-web-app.sh
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 source lib/common.sh
@@ -383,7 +383,7 @@ if [[ "$changed" -eq 0 && "${image%%@*}" == "$APP_IMAGE" && "$(jq -r .applicatio
 else
   echo "== deploying '$APP_SERVICE' ($APP_IMAGE, $REPLICAS replicas)"
   api_post application.deploy "$(jq -n --arg id "$APP_ID" --arg t "$TAG" \
-    '{applicationId: $id, title: ("Deploy roster:" + $t), description: "06-deploy-web-app.sh"}')" >/dev/null
+    '{applicationId: $id, title: ("Deploy roster:" + $t), description: "07-deploy-web-app.sh"}')" >/dev/null
   wait_for_rollout "$version"
 fi
 

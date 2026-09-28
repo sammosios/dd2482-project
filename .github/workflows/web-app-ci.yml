@@ -60,7 +60,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           # Full history: the tag is the last commit that touched web-app/,
-          # as in 06-deploy-web-app.sh, and a shallow clone would hide it.
+          # as in 07-deploy-web-app.sh, and a shallow clone would hide it.
           fetch-depth: 0
       - name: Name the image
         run: echo "IMAGE=127.0.0.1:5000/roster:$(git log -1 --format=%h -- web-app)" >>"$GITHUB_ENV"

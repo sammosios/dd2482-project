@@ -57,7 +57,7 @@ if [[ -f "$OPENBAO_INIT_FILE" ]]; then
 fi
 
 # And the web app's admin: its database died too, so the next
-# 06-deploy-web-app.sh creates a fresh admin with a new password.
+# 07-deploy-web-app.sh creates a fresh admin with a new password.
 if [[ -f "$WEB_APP_CREDS_FILE" ]]; then
   rm -f "$WEB_APP_CREDS_FILE"
   echo "== removed $WEB_APP_CREDS_FILE"
