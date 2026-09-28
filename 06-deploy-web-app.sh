@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Deploys the example web app (web-app/, "Roster") and its database, the way
-# the CI runner will later (see DESIGN.md, "Web app delivery"):
+# Deploys the example web app (web-app/, "Roster") with its database and
+# Redis, the way the CI runner will later (see DESIGN.md, "Web app delivery"):
 #   - builds the image of the last commit that touched web-app/ on a worker,
 #     and pushes it to the cluster registry as roster:<commit>
-#   - makes sure Dokploy has a project with a PostgreSQL service, and an
-#     application that runs that image (Docker provider) with its
-#     environment, replicas and domains; then deploys it
+#   - makes sure Dokploy has a project with a PostgreSQL service, a Redis
+#     service (the app's sign-in rate limiter), and an application that runs
+#     that image (Docker provider) with its environment, replicas on the
+#     workers and domains; then deploys it
 #   - waits until every replica runs the new image and the app answers
 #     through Traefik
 # Until the CI runner exists, re-running this after committing a change to
@@ -15,8 +16,8 @@
 # .web-app-credentials (gitignored, removed by teardown.sh); name and email
 # default to the Dokploy admin's from .dokploy-admin.env.
 #
-# Safe to re-run: reuses whatever exists (including a project, database and
-# app set up by hand under the same names), skips the build when the
+# Safe to re-run: reuses whatever exists (including a project, database,
+# Redis and app set up by hand under the same names), skips the build when the
 # registry already has the image, and only redeploys when a setting changed
 # or the app isn't running that image.
 # Usage: ./06-deploy-web-app.sh
@@ -28,6 +29,7 @@ require multipass curl jq git openssl
 
 PROJECT_NAME="roster"
 DB_SERVICE="roster-db"
+REDIS_SERVICE="roster-redis"
 APP_SERVICE="roster-app"
 REPLICAS=2
 APP_PORT=8080
@@ -187,6 +189,39 @@ fi
 # network: the URL the UI shows as "Internal Connection URL".
 DATABASE_URL="$(jq -r '"postgresql://\(.databaseUser):\(.databasePassword)@\(.appName):5432/\(.databaseName)"' <<<"$pg")"
 
+# --- Redis -------------------------------------------------------------------------
+
+# Where the app's sign-in rate limiter keeps its counters, shared by every
+# replica (web-app/README.md). Same steps as the database, and deployed
+# before the app, so the app never starts without it. Dokploy pins it to the
+# manager, since it has a volume.
+REDIS_ID=""
+for id in $(jq -r '(.redis // [])[].redisId' <<<"$environment"); do
+  if [[ "$(api_get redis.one "redisId=$id" | jq -r .name)" == "$REDIS_SERVICE" ]]; then
+    REDIS_ID="$id"
+    break
+  fi
+done
+if [[ -n "$REDIS_ID" ]]; then
+  echo "== Redis '$REDIS_SERVICE' already exists"
+else
+  echo "== creating Redis '$REDIS_SERVICE'"
+  # As for the database: an empty password gets one of letters and digits.
+  REDIS_ID="$(api_post redis.create "$(jq -n --arg n "$REDIS_SERVICE" --arg e "$ENV_ID" \
+    '{name: $n, appName: $n, environmentId: $e, databasePassword: "", dockerImage: "redis:8",
+      description: "Redis for Roster: sign-in rate limiting"}')" \
+    | jq -r '.redisId // empty')"
+  [[ -n "$REDIS_ID" ]] || { echo "redis.create returned no id" >&2; exit 1; }
+fi
+
+redis="$(api_get redis.one "redisId=$REDIS_ID")"
+if [[ "$(jq -r .applicationStatus <<<"$redis")" != "done" ]]; then
+  echo "== deploying Redis '$REDIS_SERVICE'"
+  api_post redis.deploy "$(jq -n --arg id "$REDIS_ID" '{redisId: $id}')" >/dev/null
+  wait_until_done redis.one "redisId=$REDIS_ID" "Redis '$REDIS_SERVICE'"
+fi
+REDIS_URL="$(jq -r '"redis://default:\(.databasePassword)@\(.appName):6379"' <<<"$redis")"
+
 # --- application -------------------------------------------------------------------
 
 APP_ID="$(jq -r --arg n "$APP_SERVICE" \
@@ -259,8 +294,8 @@ if ! jq -e --arg i "$APP_IMAGE" --arg r "$REGISTRY_ADDR" --arg u "$REGISTRY_USER
   changed=1
 fi
 
-ENV_VARS="$(printf 'DATABASE_URL=%s\nADMIN_EMAIL=%s\nADMIN_NAME="%s"\nADMIN_PASSWORD=%s' \
-  "$DATABASE_URL" "$ADMIN_EMAIL" "$ADMIN_NAME" "$ADMIN_PASSWORD")"
+ENV_VARS="$(printf 'DATABASE_URL=%s\nREDIS_URL=%s\nADMIN_EMAIL=%s\nADMIN_NAME="%s"\nADMIN_PASSWORD=%s' \
+  "$DATABASE_URL" "$REDIS_URL" "$ADMIN_EMAIL" "$ADMIN_NAME" "$ADMIN_PASSWORD")"
 if [[ "$(jq -r '.env // ""' <<<"$app")" != "$ENV_VARS" ]]; then
   echo "== saving '$APP_SERVICE' environment variables"
   # createEnvFile only matters when Dokploy builds the image; this one's prebuilt.
@@ -273,6 +308,22 @@ if [[ "$(jq -r .replicas <<<"$app")" != "$REPLICAS" ]]; then
   echo "== setting '$APP_SERVICE' to $REPLICAS replicas"
   api_post application.update "$(jq -n --arg id "$APP_ID" --argjson n "$REPLICAS" \
     '{applicationId: $id, replicas: $n}')" >/dev/null
+  changed=1
+fi
+
+# Replicas on the workers only: the control plane has 2 GB of RAM and
+# already runs Dokploy, the registry, and the app's database and Redis
+# (pinned there by their volumes). Without workers there's nowhere else to
+# go, so no constraint then.
+if vm_exists "$(worker_name 1)"; then
+  CONSTRAINTS='["node.role==worker"]'
+else
+  CONSTRAINTS='[]'
+fi
+if [[ "$(jq -c '.placementSwarm.Constraints // []' <<<"$app")" != "$CONSTRAINTS" ]]; then
+  echo "== setting '$APP_SERVICE' placement constraints to $CONSTRAINTS"
+  api_post application.update "$(jq -n --arg id "$APP_ID" --argjson c "$CONSTRAINTS" \
+    '{applicationId: $id, placementSwarm: (if $c == [] then null else {Constraints: $c} end)}')" >/dev/null
   changed=1
 fi
 

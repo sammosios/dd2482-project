@@ -52,7 +52,7 @@ All through environment variables:
 
 ## On the cluster
 
-`./06-deploy-web-app.sh` (from the repo root, also run by `bootstrap.sh`) builds the image of the last commit that touched this directory, pushes it to the cluster registry as `roster:<commit>`, and deploys it through Dokploy with its database. Re-run it after committing a change to redeploy. Why it's done this way, rather than with Dokploy's own Git builds, is in DESIGN.md.
+`./06-deploy-web-app.sh` (from the repo root, also run by `bootstrap.sh`) builds the image of the last commit that touched this directory, pushes it to the cluster registry as `roster:<commit>`, and deploys it through Dokploy with its database and Redis. Re-run it after committing a change to redeploy. Why it's done this way, rather than with Dokploy's own Git builds, is in DESIGN.md.
 
 ## Running it locally
 
