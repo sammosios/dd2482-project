@@ -1,0 +1,45 @@
+{{template "app" .}}
+
+{{define "content"}}
+<section class="panel">
+  <div class="panel-inner">
+    <header class="panel-header">
+      <div>
+        <h1 class="panel-title">{{icon "users"}}Users</h1>
+        <p class="panel-description">Create accounts, change roles, and enable or disable access.</p>
+      </div>
+      <button class="btn btn-primary" type="button" hx-get="/users/new" hx-target="#modal">{{icon "plus"}}Create user</button>
+    </header>
+    <div class="panel-body">
+      {{/* Typing or picking a filter fetches just the table (after a
+           250ms pause) and puts the filters in the URL. Without JS it's
+           a normal GET form. */}}
+      <form id="user-filters" class="toolbar" action="/users" method="get" role="search"
+            hx-get="/users" hx-target="#users-table" hx-trigger="input delay:250ms, submit"
+            hx-push-url="true" hx-indicator="#users-loading">
+        <div class="search">
+          {{icon "search"}}
+          <input class="input" type="search" name="q" value="{{.Data.Filter.Query}}" placeholder="Search name, email or job title" aria-label="Search users" autocomplete="off">
+        </div>
+        <select class="select" name="role" aria-label="Filter by role">
+          <option value="">All roles</option>
+          <option value="admin"{{if eq .Data.Filter.Role "admin"}} selected{{end}}>Admins</option>
+          <option value="member"{{if eq .Data.Filter.Role "member"}} selected{{end}}>Members</option>
+        </select>
+        <select class="select" name="status" aria-label="Filter by status">
+          <option value="">Any status</option>
+          <option value="active"{{if eq .Data.Filter.Status "active"}} selected{{end}}>Active</option>
+          <option value="disabled"{{if eq .Data.Filter.Status "disabled"}} selected{{end}}>Disabled</option>
+        </select>
+        <span id="users-loading" class="spinner htmx-indicator" aria-hidden="true">{{icon "loader-circle"}}</span>
+      </form>
+
+      {{/* Reloads itself (keeping the filters) whenever the server
+           triggers "usersChanged": after a create, edit or delete. */}}
+      <div id="users-table" hx-get="/users" hx-trigger="usersChanged from:body" hx-include="#user-filters">
+        {{template "users-table" .Data.Table}}
+      </div>
+    </div>
+  </div>
+</section>
+{{end}}

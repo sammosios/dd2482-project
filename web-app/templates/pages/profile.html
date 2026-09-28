@@ -1,0 +1,30 @@
+{{template "app" .}}
+
+{{define "content"}}
+<div class="stack">
+  <section class="panel">
+    <div class="panel-inner">
+      <header class="panel-header">
+        <div>
+          <h1 class="panel-title">{{icon "circle-user-round"}}Profile</h1>
+          <p class="panel-description">Change your name, email and job title.</p>
+        </div>
+        {{template "role-badge" .User.Role}}
+      </header>
+      {{template "profile-form" .Data.Profile}}
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-inner">
+      <header class="panel-header">
+        <div>
+          <h2 class="panel-title">{{icon "key-round"}}Password</h2>
+          <p class="panel-description">Changing it signs you out everywhere else.</p>
+        </div>
+      </header>
+      {{template "password-form" .Data.Password}}
+    </div>
+  </section>
+</div>
+{{end}}

@@ -1,0 +1,121 @@
+{{/* The users table (a usersTable). Re-rendered on its own when the
+     filters change and after every create, edit or delete. */}}
+{{define "users-table"}}
+{{if .Rows}}
+<div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>User</th>
+        <th class="hide-sm">Job title</th>
+        <th>Role</th>
+        <th>Status</th>
+        <th class="hide-md">Last sign-in</th>
+        <th><span class="sr-only">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range .Rows}}{{template "user-row" .}}{{end}}
+    </tbody>
+  </table>
+</div>
+{{else}}
+<div class="empty">
+  {{icon "users"}}
+  <p>{{if .Filtered}}No users match these filters.{{else}}No users yet.{{end}}</p>
+</div>
+{{end}}
+{{end}}
+
+{{/* One row (a userRow). The status switch swaps just this row. */}}
+{{define "user-row"}}
+<tr id="user-{{.ID}}"{{if not .Active}} class="is-disabled"{{end}}>
+  <td>
+    <div class="user-cell">
+      <span class="avatar">{{initials .Name}}</span>
+      <span class="user-cell-text">
+        <strong>{{.Name}}{{if .Self}} <span class="you">(you)</span>{{end}}</strong>
+        <small>{{.Email}}</small>
+      </span>
+    </div>
+  </td>
+  <td class="hide-sm">{{with .JobTitle}}{{.}}{{else}}<span class="muted">—</span>{{end}}</td>
+  <td>{{template "role-badge" .Role}}</td>
+  <td>
+    <div class="status-cell">
+      {{if .Self}}
+      <button type="button" class="switch" role="switch" aria-checked="true" aria-label="Your account is enabled" title="You can't disable your own account" disabled><span class="switch-thumb"></span></button>
+      {{else}}
+      <button type="button" class="switch" role="switch" aria-checked="{{.Active}}" aria-label="{{if .Active}}Disable{{else}}Enable{{end}} {{.Name}}"
+              hx-post="/users/{{.ID}}/{{if .Active}}disable{{else}}enable{{end}}" hx-target="closest tr" hx-swap="outerHTML"><span class="switch-thumb"></span></button>
+      {{end}}
+      <span class="status-label">{{if .Active}}Active{{else}}Disabled{{end}}</span>
+    </div>
+  </td>
+  <td class="hide-md muted">{{ago .LastLoginAt}}</td>
+  <td>
+    <div class="row-actions">
+      <button type="button" class="btn btn-ghost btn-icon" title="Edit" aria-label="Edit {{.Name}}" hx-get="/users/{{.ID}}/edit" hx-target="#modal">{{icon "pencil"}}</button>
+      {{if .Self}}
+      <button type="button" class="btn btn-ghost btn-icon" title="You can't delete your own account" aria-label="Delete" disabled>{{icon "trash-2"}}</button>
+      {{else}}
+      <button type="button" class="btn btn-ghost btn-icon btn-danger" title="Delete" aria-label="Delete {{.Name}}"
+              hx-delete="/users/{{.ID}}"
+              hx-confirm="{{.Name}} ({{.Email}}) will lose access and their account will be removed. This can't be undone."
+              data-confirm-title="Delete this user?" data-confirm-action="Delete user">{{icon "trash-2"}}</button>
+      {{end}}
+    </div>
+  </td>
+</tr>
+{{end}}
+
+{{/* The create/edit dialog's content (a userForm). On a validation error
+     the server answers 422 with this form again, errors filled in. */}}
+{{define "user-form"}}
+<form class="dialog-body" novalidate hx-target="#modal" hx-disabled-elt="find button[type=submit]"
+      {{if .ID}}hx-put="/users/{{.ID}}"{{else}}hx-post="/users"{{end}}>
+  <div class="dialog-header">
+    <h2 id="modal-title">{{if .ID}}Edit user{{else}}Create user{{end}}</h2>
+    <p>{{if .ID}}Change their details or role.{{else}}Add someone who can sign in to Roster.{{end}}</p>
+  </div>
+  <button type="button" class="dialog-close" data-close aria-label="Close">{{icon "x"}}</button>
+
+  <div class="field">
+    <label class="label" for="name">Name</label>
+    <input class="input" id="name" name="name" value="{{.Name}}" placeholder="Ada Lovelace" autocomplete="off" required{{if .Errors.name}} aria-invalid="true"{{end}}>
+    {{with .Errors.name}}<p class="field-error">{{.}}</p>{{end}}
+  </div>
+  <div class="field">
+    <label class="label" for="email">Email</label>
+    <input class="input" id="email" name="email" type="email" value="{{.Email}}" placeholder="ada@example.com" autocomplete="off" required{{if .Errors.email}} aria-invalid="true"{{end}}>
+    {{with .Errors.email}}<p class="field-error">{{.}}</p>{{end}}
+  </div>
+  <div class="field">
+    <label class="label" for="job_title">Job title <span class="muted">(optional)</span></label>
+    <input class="input" id="job_title" name="job_title" value="{{.JobTitle}}" placeholder="Platform engineer" autocomplete="off"{{if .Errors.job_title}} aria-invalid="true"{{end}}>
+    {{with .Errors.job_title}}<p class="field-error">{{.}}</p>{{end}}
+  </div>
+  <div class="field">
+    <label class="label" for="role">Role</label>
+    <select class="select" id="role" name="role"{{if .Self}} disabled{{end}}{{if .Errors.role}} aria-invalid="true"{{end}}>
+      <option value="member"{{if eq .Role "member"}} selected{{end}}>Member</option>
+      <option value="admin"{{if eq .Role "admin"}} selected{{end}}>Admin</option>
+    </select>
+    {{with .Errors.role}}<p class="field-error">{{.}}</p>
+    {{else}}<p class="field-hint">{{if .Self}}You can't change your own role.{{else}}Members can only see and edit their own profile. Admins manage all users.{{end}}</p>{{end}}
+  </div>
+  {{if not .Self}}
+  <div class="field">
+    <label class="label" for="password">{{if .ID}}New password{{else}}Password{{end}}</label>
+    <input class="input" id="password" name="password" type="password" autocomplete="new-password"{{if not .ID}} required{{end}}{{if .Errors.password}} aria-invalid="true"{{end}}>
+    {{with .Errors.password}}<p class="field-error">{{.}}</p>
+    {{else}}<p class="field-hint">{{if .ID}}Leave empty to keep the current one. Setting one signs them out everywhere.{{else}}At least 8 characters.{{end}}</p>{{end}}
+  </div>
+  {{end}}
+
+  <div class="dialog-footer">
+    <button type="button" class="btn btn-outline" data-close>Cancel</button>
+    <button type="submit" class="btn btn-primary">{{if .ID}}Save changes{{else}}Create user{{end}}</button>
+  </div>
+</form>
+{{end}}

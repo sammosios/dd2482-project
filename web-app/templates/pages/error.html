@@ -1,0 +1,10 @@
+{{template "auth" .}}
+
+{{define "content"}}
+<div class="auth-header">
+  <p class="error-code">Error {{.Data.Status}}</p>
+  <h1>{{.Title}}</h1>
+  <p>{{.Data.Message}}</p>
+</div>
+<a class="btn btn-primary btn-block" href="/">Back to the dashboard</a>
+{{end}}

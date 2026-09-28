@@ -1,0 +1,97 @@
+{{template "app" .}}
+
+{{define "content"}}
+<div class="stack">
+  <section class="panel">
+    <div class="panel-inner">
+      <header class="panel-header">
+        <div>
+          <h1 class="panel-title">{{icon "layout-dashboard"}}Overview</h1>
+          <p class="panel-description">Welcome back, {{firstName .User.Name}}. {{if .User.IsAdmin}}Here's who has access to Roster.{{else}}Here's your account at a glance.{{end}}</p>
+        </div>
+        {{if .User.IsAdmin}}
+        <a class="btn btn-primary" href="/users">{{icon "users"}}Manage users</a>
+        {{else}}
+        <a class="btn btn-primary" href="/profile">{{icon "pencil"}}Edit profile</a>
+        {{end}}
+      </header>
+      <div class="panel-body">
+        {{if .User.IsAdmin}}
+        {{with .Data.Stats}}
+        <div class="stats">
+          <div class="stat">
+            <div class="stat-head"><span>Total users</span>{{icon "users"}}</div>
+            <p class="stat-value">{{.Total}}</p>
+            <p class="stat-note">Every account</p>
+          </div>
+          <div class="stat">
+            <div class="stat-head"><span>Active</span>{{icon "user-check"}}</div>
+            <p class="stat-value">{{.Active}}</p>
+            <p class="stat-note">Can sign in</p>
+          </div>
+          <div class="stat">
+            <div class="stat-head"><span>Disabled</span>{{icon "user-x"}}</div>
+            <p class="stat-value">{{.Disabled}}</p>
+            <p class="stat-note">Blocked from signing in</p>
+          </div>
+          <div class="stat">
+            <div class="stat-head"><span>Admins</span>{{icon "shield"}}</div>
+            <p class="stat-value">{{.Admins}}</p>
+            <p class="stat-note">Can manage users</p>
+          </div>
+        </div>
+        {{end}}
+        {{else}}
+        {{with .User}}
+        <dl class="details">
+          <div><dt>{{icon "mail"}}Email</dt><dd>{{.Email}}</dd></div>
+          <div><dt>{{icon "briefcase"}}Job title</dt><dd>{{with .JobTitle}}{{.}}{{else}}<span class="muted">Not set</span>{{end}}</dd></div>
+          <div><dt>{{icon "shield"}}Role</dt><dd>{{template "role-badge" .Role}}</dd></div>
+          <div><dt>{{icon "calendar"}}Member since</dt><dd>{{date .CreatedAt}}</dd></div>
+          <div><dt>{{icon "clock"}}Last sign-in</dt><dd>{{ago .LastLoginAt}}</dd></div>
+        </dl>
+        {{end}}
+        {{end}}
+      </div>
+    </div>
+  </section>
+
+  {{if .User.IsAdmin}}
+  <section class="panel">
+    <div class="panel-inner">
+      <header class="panel-header">
+        <div>
+          <h2 class="panel-title">{{icon "user-plus"}}Recently added</h2>
+          <p class="panel-description">The newest accounts, including people who signed up themselves.</p>
+        </div>
+        <a class="btn btn-outline" href="/users">View all{{icon "arrow-right"}}</a>
+      </header>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr><th>User</th><th>Role</th><th>Status</th><th class="hide-sm">Joined</th></tr>
+            </thead>
+            <tbody>
+              {{range .Data.Recent}}
+              <tr>
+                <td>
+                  <div class="user-cell">
+                    <span class="avatar">{{initials .Name}}</span>
+                    <span class="user-cell-text"><strong>{{.Name}}</strong><small>{{.Email}}</small></span>
+                  </div>
+                </td>
+                <td>{{template "role-badge" .Role}}</td>
+                <td>{{template "status-badge" .Active}}</td>
+                <td class="hide-sm muted">{{date .CreatedAt}}</td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+  {{end}}
+</div>
+{{end}}
