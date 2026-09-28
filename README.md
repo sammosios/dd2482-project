@@ -35,7 +35,13 @@ Put a GitHub PAT that can manage this repo's self-hosted runners in `GITHUB_RUNN
 ./06-deploy-web-app.sh   # redeploy the web app after committing a change to web-app/
 ```
 
-Both are safe to re-run. `bootstrap.sh` is idempotent — re-running it with the same or a higher worker count skips anything already up and only adds what's missing. **Known limitation**: re-running with a *lower* worker count does not scale down — extra workers are left running (see PLAN.md).
+All three are safe to re-run. `bootstrap.sh` is idempotent — re-running it with the same or a higher worker count skips anything already up and only adds what's missing. **Known limitation**: re-running with a *lower* worker count does not scale down — extra workers are left running (see PLAN.md).
+
+Each phase is also its own standalone script if you need finer control: `00-launch-cp-vm.sh` → `01-dokploy-api-key.sh` → `02-launch-worker-vms.sh` → `03-setup-registry.sh` → `04-setup-ci-runner.sh` → `05-setup-openbao.sh` → `06-deploy-core-services.sh` → `06-deploy-web-app.sh`. `bootstrap.sh` just chains these.
+
+Deploying an app isn't part of bootstrap: when you have one, follow [APP-PROJECT-SETUP.md](APP-PROJECT-SETUP.md) to give its Dokploy project its own OpenBao secrets provider.
+
+**Running inside WSL:** Windows has no route to the VMs. A local forwarder, `forward.sh` (gitignored, since only WSL setups need it), fixes that: forwarding `localhost:3000` to Dokploy and `localhost:8081` to Traefik makes Dokploy and every app with a `*.localhost` domain reachable from Windows, e.g. `http://roster.localhost:8081` (see DESIGN.md). `bootstrap.sh` runs it if present, and `teardown.sh` stops it.
 
 ### If multipass itself breaks (macOS)
 
@@ -46,12 +52,6 @@ If every `multipass` command fails with `cannot connect to the multipass socket`
 ./multipass-reset.sh       # wipe ALL multipass VMs and state, restart the daemon (-y to skip prompt)
 ```
 
-Each phase is also its own standalone script if you need finer control: `00-launch-cp-vm.sh` → `01-dokploy-api-key.sh` → `02-launch-worker-vms.sh` → `03-setup-registry.sh` → `04-setup-ci-runner.sh` → `05-setup-openbao.sh` → `06-deploy-core-services.sh` → `06-deploy-web-app.sh`. `bootstrap.sh` just chains these.
-
-Deploying an app isn't part of bootstrap: when you have one, follow [APP-PROJECT-SETUP.md](APP-PROJECT-SETUP.md) to give its Dokploy project its own OpenBao secrets provider.
-
-**Running inside WSL:** Windows has no route to the VMs. A local forwarder, `forward.sh` (gitignored, since only WSL setups need it), fixes that: forwarding `localhost:3000` to Dokploy and `localhost:8081` to Traefik makes Dokploy and every app with a `*.localhost` domain reachable from Windows, e.g. `http://roster.localhost:8081` (see DESIGN.md). `bootstrap.sh` runs it if present, and `teardown.sh` stops it.
-
 ## What to expect right now
 
 After `./bootstrap.sh N` finishes:
@@ -60,11 +60,10 @@ After `./bootstrap.sh N` finishes:
 - A Docker Swarm with the control plane as manager and all `N` workers `Ready`/`Active` (`docker node ls` on the control plane)
 - Dokploy reachable at `http://<control-plane-ip>:3000`, logged in with the admin account from `.dokploy-admin.env`
 - A container registry at `127.0.0.1:5000` on every node, pinned to the control plane and registered in Dokploy as `cluster-registry`. Its credentials are in `.registry-credentials` (gitignored).
-- One self-hosted GitHub Actions runner per worker, if a PAT is configured (below). Target them with `runs-on: [self-hosted, dokploy]`.
-
-Every service runs from a compose file in [`stacks/`](./stacks), deployed as a Dokploy Compose resource of type Stack (see DESIGN.md "Services as code").
-
+- One self-hosted GitHub Actions runner per worker, if a PAT is configured (see "Optional: CI runners" above). Target them with `runs-on: [self-hosted, dokploy]`.
 - The example web app, **Roster** ([`web-app/`](./web-app)), in the Dokploy project `roster`: 2 replicas, on the workers, of the image `127.0.0.1:5000/roster:<commit>`, plus its own PostgreSQL and Redis services (Redis holds the sign-in rate limiter's counters). It's at `http://roster.localhost:8081` from Windows (while `forward.sh` runs), or `http://roster.<control-plane-ip>.sslip.io` wherever the VM network is reachable. The first admin's password is in `.web-app-credentials` (gitignored). To redeploy after committing a change to `web-app/`, run `./06-deploy-web-app.sh`; it builds and pushes the new image and rolls the replicas over one by one.
 - `05-deploy-core-services.sh` is still a stub: the rest of the core service set (secrets vault, Trivy scanning) is designed but not yet implemented; see PLAN.md's "Core services" checklist.
+
+The registry and the runners run from compose files in [`stacks/`](./stacks), deployed as Dokploy Compose resources of type Stack (see DESIGN.md "Services as code"). The web app is a Dokploy application instead (DESIGN.md, "Web app delivery").
 
 `./teardown.sh` returns you to a clean slate — no VMs, no stale local credentials.
