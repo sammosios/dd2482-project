@@ -7,7 +7,7 @@ Reproducible Multipass VMs → Docker Swarm → [Dokploy](https://dokploy.com/) 
 - [Multipass](https://multipass.run/) — provisions the VMs
 - `curl`, `jq`, `git`, `openssl`
 - **bash 4+** — macOS ships bash 3.2 by default, which is too old (`teardown.sh` uses `mapfile`, a bash 4+ builtin). Install a newer one (e.g. `brew install bash`) and make sure it's first in `PATH`; check with `bash --version`.
-- ~2 CPU cores per VM, 4GB RAM for the control plane (`--cp-mem`) and 2GB per worker (`--mem`). Disks are 10G per worker and 30G for the control plane (`--cp-disk`), which holds the image builds and the registry. Multipass disks are sparse, so they only use host space as they fill. — `bootstrap.sh` estimates how many workers your machine can handle if you don't pass a count.
+- ~2 CPU cores per VM, 4GB RAM for the control plane (`--cp-mem`) and 2GB per worker (`--mem`). Disks are 15G per worker (`--disk`), which run the CI jobs, and 30G for the control plane (`--cp-disk`), which holds the image builds and the registry. Multipass disks are sparse, so they only use host space as they fill. — `bootstrap.sh` estimates how many workers your machine can handle if you don't pass a count.
 - If running from Windows: see PLAN.md's "Host OS notes" before using WSL2 — there's a real networking gap to know about first.
 
 ## One-time setup: admin credentials

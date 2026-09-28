@@ -9,7 +9,10 @@ WORKER_PREFIX="${PREFIX}-worker"
 WORKERS="${WORKERS:-2}"
 CPUS="${CPUS:-2}"
 MEM="${MEM:-2G}"
-DISK="${DISK:-10G}"
+# Workers run the CI jobs: the runner image, Trivy's database, the build
+# cache and one job's files need about 9G at peak, and 15G leaves room for
+# an image upgrade (see DESIGN.md "CI runners"). Sparse, like CP_DISK.
+DISK="${DISK:-15G}"
 # The control plane needs more than workers: Dokploy builds every image on
 # the manager and the registry's volume lives there too (see DESIGN.md).
 # Multipass disks are sparse, so this only costs host space as it fills.

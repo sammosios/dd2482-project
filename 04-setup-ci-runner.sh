@@ -4,7 +4,9 @@
 # the why:
 #   - myoung34/github-runner, which registers itself with a PAT on every
 #     start, so nothing here has to mint (short-lived) registration tokens
-#   - ephemeral: one job per container, then Swarm starts a clean one
+#   - ephemeral: one job per container, then Swarm starts a clean one; the
+#     swarm keeps only the newest finished container per node, since each
+#     holds everything its job wrote
 #   - Swarm global mode on node.role == worker: every worker gets a runner,
 #     including ones 02-launch-worker-vms.sh adds later
 #   - the node's Docker socket is mounted, so jobs can build and push to the
@@ -89,6 +91,18 @@ dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null \
 WORKER_COUNT="$(cp_exec docker node ls --filter role=worker --format '{{.Status}}' | grep -c '^Ready$' || true)"
 [[ "$WORKER_COUNT" -gt 0 ]] \
   || { echo "no Ready workers in the swarm, and runners only run on workers — run 02-launch-worker-vms.sh first" >&2; exit 1; }
+
+# Each ephemeral job leaves its stopped container behind, with everything
+# the job wrote into it (toolchains, module caches, the checkout: up to
+# ~650 MB). Swarm keeps 5 finished tasks per node by default, which filled
+# a worker's disk after two jobs, so keep only the newest. Swarm-wide; the
+# extras are deleted as new tasks start on each node.
+if [[ "$(cp_exec docker info --format '{{.Swarm.Cluster.Spec.Orchestration.TaskHistoryRetentionLimit}}')" == 1 ]]; then
+  echo "== swarm already keeps 1 finished task per node"
+else
+  echo "== keeping 1 finished task per node (swarm task history limit)"
+  cp_exec docker swarm update --task-history-limit 1 >/dev/null
+fi
 
 # --- PAT as a Swarm secret ---------------------------------------------------
 
