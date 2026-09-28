@@ -14,6 +14,7 @@ import (
 
 type app struct {
 	db          *store
+	limiter     *loginLimiter // nil when REDIS_URL isn't set
 	views       *views
 	log         *slog.Logger
 	host        string // the container's hostname, shown in the header: which replica answered

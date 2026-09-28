@@ -66,7 +66,8 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer((&app{db: &store{pool: pool}, views: v, log: log, host: "test", allowSignup: true}).routes())
+	limiter, mr := newTestLimiter(t)
+	srv := httptest.NewServer((&app{db: &store{pool: pool}, limiter: limiter, views: v, log: log, host: "test", allowSignup: true}).routes())
 	t.Cleanup(srv.Close)
 
 	userID := func(email string) int64 {
@@ -175,6 +176,22 @@ func TestEndToEnd(t *testing.T) {
 	carol.expect("GET", "/", nil, nil, 200, "Member since")
 	carol.expect("POST", "/logout", nil, nil, 303, "")
 	carol.expect("GET", "/", nil, nil, 303, "")
+
+	// Rate limiting: after loginAttempts tries the account is locked, even
+	// for the right password, until the window runs out. Unknown emails
+	// behave the same, so a lockout doesn't reveal who has an account.
+	guesser := newClient(t, srv.URL)
+	for _, email := range []string{"admin@example.com", "nobody@example.com"} {
+		for range loginAttempts {
+			guesser.expect("POST", "/login", form("email", email, "password", "a-wrong-guess"), nil, 422, "Invalid email or password.")
+		}
+		resp := guesser.expect("POST", "/login", form("email", email, "password", "admin-password"), nil, 429, "Too many sign-in attempts")
+		if resp.Header.Get("Retry-After") == "" {
+			t.Fatal("a lockout should say when to retry")
+		}
+	}
+	mr.FastForward(loginWindow)
+	guesser.login("admin@example.com", "admin-password")
 }
 
 func form(pairs ...string) url.Values {
