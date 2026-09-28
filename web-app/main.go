@@ -20,6 +20,7 @@ import (
 type config struct {
 	port          string
 	databaseURL   string
+	redisURL      string // optional: without it, sign-ins aren't rate limited
 	adminEmail    string
 	adminPassword string
 	adminName     string
@@ -30,6 +31,7 @@ func loadConfig() (config, error) {
 	cfg := config{
 		port:          envOr("PORT", "8080"),
 		databaseURL:   os.Getenv("DATABASE_URL"),
+		redisURL:      os.Getenv("REDIS_URL"),
 		adminEmail:    normalizeEmail(os.Getenv("ADMIN_EMAIL")),
 		adminPassword: os.Getenv("ADMIN_PASSWORD"),
 		adminName:     envOr("ADMIN_NAME", "Administrator"),
@@ -84,13 +86,18 @@ func run(log *slog.Logger) error {
 	if err := prepareDatabase(ctx, pool, cfg, log); err != nil {
 		return err
 	}
+	limiter, err := newLoginLimiter(ctx, cfg.redisURL, log)
+	if err != nil {
+		return err
+	}
+	defer limiter.close()
 
 	v, err := newViews()
 	if err != nil {
 		return err
 	}
 	host, _ := os.Hostname()
-	a := &app{db: &store{pool: pool}, views: v, log: log, host: host, allowSignup: cfg.allowSignup}
+	a := &app{db: &store{pool: pool}, limiter: limiter, views: v, log: log, host: host, allowSignup: cfg.allowSignup}
 	go a.cleanupSessions(ctx)
 
 	srv := &http.Server{

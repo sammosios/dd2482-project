@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
+	"math"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -121,6 +123,17 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 	form := loginForm{Email: normalizeEmail(r.PostFormValue("email"))}
 	password := r.PostFormValue("password")
 
+	// Counted before the account is even looked up, and the same way for
+	// emails nobody has, so a lockout reveals nothing about which accounts
+	// exist.
+	if ok, wait := a.limiter.allow(r.Context(), form.Email); !ok {
+		a.log.Warn("sign-in refused: too many attempts", "retry_in", wait.Round(time.Second))
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
+		form.Error = lockedMessage(wait)
+		a.render(w, r, http.StatusTooManyRequests, "login.html", view{Title: "Sign in", Data: form})
+		return
+	}
+
 	u, err := a.db.UserByEmail(r.Context(), form.Email)
 	if err != nil && !errors.Is(err, errNotFound) {
 		a.serverError(w, r, err)
@@ -146,6 +159,7 @@ func (a *app) login(w http.ResponseWriter, r *http.Request) {
 		a.serverError(w, r, err)
 		return
 	}
+	a.limiter.reset(r.Context(), form.Email)
 	if err := a.db.TouchLogin(r.Context(), u.ID); err != nil {
 		a.log.Warn("record sign-in time", "err", err)
 	}
