@@ -49,4 +49,11 @@ if [[ -f "$REGISTRY_CREDS_FILE" ]]; then
   echo "== removed $REGISTRY_CREDS_FILE"
 fi
 
+# And OpenBao's root token: its data and unseal key lived on the control
+# plane, so the next 05-setup-openbao.sh initializes a fresh one.
+if [[ -f "$OPENBAO_INIT_FILE" ]]; then
+  rm -f "$OPENBAO_INIT_FILE"
+  echo "== removed $OPENBAO_INIT_FILE"
+fi
+
 echo "== teardown complete"

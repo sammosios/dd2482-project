@@ -45,7 +45,9 @@ If every `multipass` command fails with `cannot connect to the multipass socket`
 ./multipass-reset.sh       # wipe ALL multipass VMs and state, restart the daemon (-y to skip prompt)
 ```
 
-Each phase is also its own standalone script if you need finer control: `00-launch-cp-vm.sh` → `01-dokploy-api-key.sh` → `02-launch-worker-vms.sh` → `03-setup-registry.sh` → `04-setup-ci-runner.sh` → `05-deploy-core-services.sh`. `bootstrap.sh` just chains these.
+Each phase is also its own standalone script if you need finer control: `00-launch-cp-vm.sh` → `01-dokploy-api-key.sh` → `02-launch-worker-vms.sh` → `03-setup-registry.sh` → `04-setup-ci-runner.sh` → `05-setup-openbao.sh` → `06-deploy-core-services.sh`. `bootstrap.sh` just chains these.
+
+Deploying an app isn't part of bootstrap: when you have one, follow [APP-PROJECT-SETUP.md](APP-PROJECT-SETUP.md) to give its Dokploy project its own OpenBao secrets provider.
 
 ## What to expect right now
 
@@ -56,7 +58,7 @@ After `./bootstrap.sh N` finishes:
 - Dokploy reachable at `http://<control-plane-ip>:3000`, logged in with the admin account from `.dokploy-admin.env`
 - A container registry at `127.0.0.1:5000` on every node, pinned to the control plane and registered in Dokploy as `cluster-registry`. Its credentials are in `.registry-credentials` (gitignored).
 - One self-hosted GitHub Actions runner per worker, if a PAT is configured (below). Target them with `runs-on: [self-hosted, dokploy]`.
-- **No application services deployed yet** — `05-deploy-core-services.sh` is still a stub. The rest of the core service set (example app, database, secrets vault, Trivy scanning) is designed but not yet implemented; see PLAN.md's "Core services" checklist.
+- **No application services deployed yet** — `06-deploy-core-services.sh` is still a stub. The rest of the core service set (example app, database, Trivy scanning) is designed but not yet implemented; see PLAN.md's "Core services" checklist.
 
 Every service runs from a compose file in [`stacks/`](./stacks), deployed as a Dokploy Compose resource of type Stack (see DESIGN.md "Services as code").
 

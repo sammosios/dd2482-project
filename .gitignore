@@ -4,3 +4,5 @@ forward.sh
 .forward.pid
 .registry-credentials
 .github-runner.env
+.openbao-init.json
+.openbao-init.json.stale

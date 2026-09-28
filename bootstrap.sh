@@ -82,6 +82,7 @@ if [[ -n "${GITHUB_RUNNER_PAT:-}" || -f .github-runner.env ]]; then
 else
   echo "== skipping CI runners: no GITHUB_RUNNER_PAT or .github-runner.env (see .github-runner.env.example)"
 fi
-./05-deploy-core-services.sh
+./05-setup-openbao.sh
+./06-deploy-core-services.sh
 
 echo "== cluster up: $((WORKERS + 1)) nodes"
