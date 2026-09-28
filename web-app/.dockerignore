@@ -1,0 +1,8 @@
+# Keep the build context to what the build needs.
+# Dokploy writes the app's environment variables (DATABASE_URL, passwords)
+# to a .env file next to the Dockerfile before building: it must not end
+# up in the build context, or it would be baked into an image layer.
+.env
+*.md
+Dockerfile
+.dockerignore

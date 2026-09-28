@@ -1,0 +1,60 @@
+{{/* Your own details (a userForm). Swaps itself on save. */}}
+{{define "profile-form"}}
+<form id="profile-form" class="panel-body form" novalidate
+      hx-put="/profile" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="find button[type=submit]">
+  <div class="form-grid">
+    <div class="field">
+      <label class="label" for="name">Name</label>
+      <input class="input" id="name" name="name" value="{{.Name}}" autocomplete="name" required{{if .Errors.name}} aria-invalid="true"{{end}}>
+      {{with .Errors.name}}<p class="field-error">{{.}}</p>{{end}}
+    </div>
+    <div class="field">
+      <label class="label" for="email">Email</label>
+      <input class="input" id="email" name="email" type="email" value="{{.Email}}" autocomplete="email" required{{if .Errors.email}} aria-invalid="true"{{end}}>
+      {{with .Errors.email}}<p class="field-error">{{.}}</p>{{else}}<p class="field-hint">You sign in with this.</p>{{end}}
+    </div>
+    <div class="field field-wide">
+      <label class="label" for="job_title">Job title <span class="muted">(optional)</span></label>
+      <input class="input" id="job_title" name="job_title" value="{{.JobTitle}}" placeholder="Platform engineer" autocomplete="organization-title"{{if .Errors.job_title}} aria-invalid="true"{{end}}>
+      {{with .Errors.job_title}}<p class="field-error">{{.}}</p>{{end}}
+    </div>
+  </div>
+  <div class="form-actions">
+    <button class="btn btn-primary" type="submit">Save changes</button>
+  </div>
+</form>
+{{end}}
+
+{{/* The response to a successful save (a profileSaved): the form, and the
+     sidebar's name and email, swapped "out of band" into #sidebar-user. */}}
+{{define "profile-saved"}}
+{{template "profile-form" .Form}}
+<div hx-swap-oob="innerHTML:#sidebar-user">{{template "sidebar-user" .User}}</div>
+{{end}}
+
+{{/* Changing your own password (a passwordForm). */}}
+{{define "password-form"}}
+<form id="password-form" class="panel-body form" novalidate
+      hx-put="/profile/password" hx-target="this" hx-swap="outerHTML" hx-disabled-elt="find button[type=submit]">
+  <div class="form-grid">
+    <div class="field field-wide">
+      <label class="label" for="current">Current password</label>
+      <input class="input" id="current" name="current" type="password" autocomplete="current-password" required{{if .Errors.current}} aria-invalid="true"{{end}}>
+      {{with .Errors.current}}<p class="field-error">{{.}}</p>{{end}}
+    </div>
+    <div class="field">
+      <label class="label" for="password">New password</label>
+      <input class="input" id="password" name="password" type="password" autocomplete="new-password" required{{if .Errors.password}} aria-invalid="true"{{end}}>
+      {{with .Errors.password}}<p class="field-error">{{.}}</p>{{else}}<p class="field-hint">At least 8 characters.</p>{{end}}
+    </div>
+    <div class="field">
+      <label class="label" for="confirm">Repeat new password</label>
+      <input class="input" id="confirm" name="confirm" type="password" autocomplete="new-password" required{{if .Errors.confirm}} aria-invalid="true"{{end}}>
+      {{with .Errors.confirm}}<p class="field-error">{{.}}</p>{{end}}
+    </div>
+  </div>
+  <div class="form-actions">
+    <button class="btn btn-primary" type="submit">Change password</button>
+  </div>
+</form>
+{{end}}
