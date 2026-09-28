@@ -1,0 +1,90 @@
+# CI for the example web app (web-app/, "Roster"), run on the cluster's own
+# self-hosted runners (04-setup-ci-runner.sh): it tests the app, builds its
+# image and gates the image on a Trivy scan. Deploying is Dokploy's job.
+# Handing it new images (push to the cluster registry, then tell Dokploy)
+# comes later: that needs credentials that change with every rebuild, so
+# the runners have to be handed them first.
+name: Web app CI
+
+on:
+  push:
+    # Branches only (tag pushes ignore path filters), and only when the app
+    # or this workflow changed. No pull_request trigger: a PR's commits are
+    # pushes to its branch already, so it would run everything twice.
+    branches: ["**"]
+    paths:
+      - web-app/**
+      - .github/workflows/web-app-ci.yml
+  # The "Run workflow" button, e.g. to try the runners on a fresh cluster.
+  # It only shows up once this file is on the default branch.
+  workflow_dispatch:
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # An explicit bash adds -o pipefail to GitHub's default -e.
+    shell: bash
+
+jobs:
+  test:
+    runs-on: [self-hosted, dokploy]
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web-app
+    steps:
+      - uses: actions/checkout@v7
+      # The runner image has no Go. Same minor version as the Dockerfile's
+      # build stage, so the tests run on the compiler that builds the image.
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27"
+          cache-dependency-path: web-app/go.sum
+      - run: go vet ./...
+      # Unit tests only: TestEndToEnd needs a Postgres (TEST_DATABASE_URL)
+      # and skips itself without one.
+      - run: go test ./...
+
+  image:
+    needs: test
+    runs-on: [self-hosted, dokploy]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history: the tag is the last commit that touched web-app/,
+          # as in 06-deploy-web-app.sh, and a shallow clone would hide it.
+          fetch-depth: 0
+      - name: Name the image
+        run: echo "IMAGE=127.0.0.1:5000/roster:$(git log -1 --format=%h -- web-app)" >>"$GITHUB_ENV"
+      # Built by the node's own Docker daemon through the mounted socket, so
+      # the build cache outlives the ephemeral runner. Plain docker build
+      # rather than setup-buildx-action, which by default builds in a
+      # separate container whose 127.0.0.1 isn't the node's.
+      - name: Build
+        run: docker build -t "$IMAGE" web-app
+      # Fails on HIGH and CRITICAL findings that have a fix. Trivy runs as a
+      # container on the same daemon: the socket path resolves on the node,
+      # so it reads the image straight from the node's Docker, and its
+      # vulnerability database stays in a named volume on the node instead
+      # of being downloaded for every job.
+      - name: Scan with Trivy
+        run: >-
+          docker run --rm
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v trivy-cache:/cache
+          aquasec/trivy:0.74.0 image
+          --cache-dir /cache --image-src docker --no-progress
+          --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
+          "$IMAGE"
+      # Nothing is pushed yet, and the workers' disks are only 10G.
+      - name: Remove the image
+        if: always()
+        run: docker image rm "$IMAGE" || true
