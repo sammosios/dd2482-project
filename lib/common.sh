@@ -14,6 +14,9 @@ DISK="${DISK:-10G}"
 # the manager and the registry's volume lives there too (see DESIGN.md).
 # Multipass disks are sparse, so this only costs host space as it fills.
 CP_DISK="${CP_DISK:-30G}"
+# Dokploy, its Postgres and Redis, Traefik, the registry and every image
+# build all run on the manager, which is too much for a worker's 2G.
+CP_MEM="${CP_MEM:-4G}"
 IMAGE="${IMAGE:-24.04}"
 
 DOKPLOY_PORT=3000
@@ -70,13 +73,13 @@ suggest_max_workers() {
   # running on the host. Reserves 2 cores / 2GB for the host OS on top of
   # what the (already-running) control plane itself needs, then divides
   # what's left by one worker's CPU/mem footprint.
-  local cpus mem_gb cpu_per_vm="$CPUS" mem_per_vm="${MEM%[Gg]}"
+  local cpus mem_gb cpu_per_vm="$CPUS" mem_per_vm="${MEM%[Gg]}" cp_mem="${CP_MEM%[Gg]}"
   cpus="$(host_cpus)"
   mem_gb="$(host_mem_gb)"
   [[ "$cpus" -gt 0 && "$mem_gb" -gt 0 ]] || { echo "?"; return; }
 
   local usable_cpus=$(( cpus - 2 - cpu_per_vm ))
-  local usable_mem=$(( mem_gb - 2 - mem_per_vm ))
+  local usable_mem=$(( mem_gb - 2 - cp_mem ))
   local by_cpu=$(( cpu_per_vm > 0 ? usable_cpus / cpu_per_vm : 0 ))
   local by_mem=$(( mem_per_vm > 0 ? usable_mem / mem_per_vm : 0 ))
   local max=$(( by_cpu < by_mem ? by_cpu : by_mem ))
@@ -87,13 +90,13 @@ suggest_max_workers() {
 launch_vm() {
   # Shared by the control-plane and worker launch scripts: launch (unless it
   # already exists) and block until cloud-init is done.
-  # launch_vm <name> [disk] - disk defaults to $DISK.
-  local name="$1" disk="${2:-$DISK}"
+  # launch_vm <name> [disk] [mem] - default to the workers' $DISK / $MEM.
+  local name="$1" disk="${2:-$DISK}" mem="${3:-$MEM}"
   if vm_exists "$name"; then
     echo "== $name already exists, skipping launch"
   else
-    echo "== launching $name (cpus=$CPUS mem=$MEM disk=$disk image=$IMAGE)"
-    multipass launch "$IMAGE" --name "$name" --cpus "$CPUS" --memory "$MEM" --disk "$disk"
+    echo "== launching $name (cpus=$CPUS mem=$mem disk=$disk image=$IMAGE)"
+    multipass launch "$IMAGE" --name "$name" --cpus "$CPUS" --memory "$mem" --disk "$disk"
   fi
   echo "== waiting for cloud-init on $name"
   wait_for_cloudinit "$name"
@@ -122,6 +125,21 @@ with_timeout() {
 }
 
 vm_exists() { multipass info "$1" >/dev/null 2>&1; }
+
+cp_exec() {
+  # cp_exec <cmd...> - runs a command as root on the control plane. Bare
+  # `multipass exec` has been seen to hang indefinitely (see PLAN.md), so
+  # cap each call and retry on timeout. Only pass commands that are safe to
+  # run twice, since a timed-out call may still have gone through. No
+  # stdin: with_timeout runs it in the background.
+  local attempt rc=0
+  for attempt in 1 2 3; do
+    with_timeout "${CP_EXEC_TIMEOUT:-60}" multipass exec "$CP_NAME" -- sudo "$@" && return 0 || rc=$?
+    [[ "$rc" -eq 124 ]] || return "$rc"
+    echo "  (multipass exec on $CP_NAME timed out, retry $attempt/3)" >&2
+  done
+  return 124
+}
 
 ensure_docker() {
   # Only the control plane gets Docker via the Dokploy installer - workers

@@ -12,7 +12,8 @@
 #
 # Usage:
 #   ./bootstrap.sh 3                                  # 3 workers
-#   ./bootstrap.sh --workers 3 [--cpus N] [--mem SIZE] [--disk SIZE] [--cp-disk SIZE]
+#   ./bootstrap.sh --workers 3 [--cpus N] [--mem SIZE] [--disk SIZE]
+#                  [--cp-mem SIZE] [--cp-disk SIZE]   # --mem/--disk are per worker
 #   ./bootstrap.sh                                    # prompts for worker count
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -28,6 +29,7 @@ while [[ $# -gt 0 ]]; do
     --cpus) CPUS="$2"; shift 2 ;;
     --mem) MEM="$2"; shift 2 ;;
     --disk) DISK="$2"; shift 2 ;;
+    --cp-mem) CP_MEM="$2"; shift 2 ;;
     --cp-disk) CP_DISK="$2"; shift 2 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
@@ -36,7 +38,7 @@ done
 if [[ "$WORKERS_SET" -eq 0 ]]; then
   cpus_detected="$(host_cpus)"
   mem_detected="$(host_mem_gb)"
-  cp_mem="${MEM%[Gg]}"
+  cp_mem="${CP_MEM%[Gg]}"
 
   if [[ "$cpus_detected" -gt 0 && "$mem_detected" -gt 0 ]]; then
     suggestion="$(suggest_max_workers)"
@@ -54,7 +56,7 @@ fi
 
 echo "== spinning up control plane + $WORKERS worker(s)"
 
-./00-launch-cp-vm.sh --cpus "$CPUS" --mem "$MEM" --disk "$CP_DISK"
+./00-launch-cp-vm.sh --cpus "$CPUS" --mem "$CP_MEM" --disk "$CP_DISK"
 
 # forward.sh is a gitignored, WSL-only local helper (see the script itself)
 # - run it if present, so Dokploy is reachable from Windows before 01 needs
@@ -73,6 +75,13 @@ fi
 
 ./02-launch-worker-vms.sh --workers "$WORKERS" --cpus "$CPUS" --mem "$MEM" --disk "$DISK"
 ./03-setup-registry.sh
-./04-deploy-core-services.sh
+# Runners need a GitHub PAT, which not everyone bringing up a cluster has -
+# skip them rather than fail the whole chain.
+if [[ -n "${GITHUB_RUNNER_PAT:-}" || -f .github-runner.env ]]; then
+  ./04-setup-ci-runner.sh
+else
+  echo "== skipping CI runners: no GITHUB_RUNNER_PAT or .github-runner.env (see .github-runner.env.example)"
+fi
+./05-deploy-core-services.sh
 
 echo "== cluster up: $((WORKERS + 1)) nodes"

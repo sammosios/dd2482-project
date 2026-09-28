@@ -8,7 +8,8 @@
 # control plane is authenticated - that split is what lets scaling out the
 # cluster later be a single command against an already-running control plane.
 # Usage: ./00-launch-cp-vm.sh [--cpus N] [--mem SIZE] [--disk SIZE]
-#   --disk sets CP_DISK (default 30G), not the workers' DISK.
+#   --mem/--disk set CP_MEM (default 4G) / CP_DISK (default 30G), not the
+#   workers' MEM / DISK.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 source lib/common.sh
@@ -16,7 +17,7 @@ source lib/common.sh
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --cpus) CPUS="$2"; shift 2 ;;
-    --mem) MEM="$2"; shift 2 ;;
+    --mem) CP_MEM="$2"; shift 2 ;;
     --disk) CP_DISK="$2"; shift 2 ;;
     *) echo "unknown flag: $1" >&2; exit 1 ;;
   esac
@@ -24,7 +25,7 @@ done
 
 require multipass curl
 
-launch_vm "$CP_NAME" "$CP_DISK"
+launch_vm "$CP_NAME" "$CP_DISK" "$CP_MEM"
 
 CP_IP="$(vm_ip "$CP_NAME")"
 if dokploy_port_open "$CP_IP"; then

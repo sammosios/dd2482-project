@@ -16,12 +16,15 @@
 # of the credentials, so changing them rolls out a new config instead of
 # colliding with the old (immutable) one.
 #
+# The compose file itself is stacks/registry.yml (see lib/dokploy.sh).
+#
 # Safe to re-run: reuses the project/compose/registry entries if they exist,
 # and only redeploys when the compose file changed or the registry is down.
 # Usage: ./03-setup-registry.sh
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 source lib/common.sh
+source lib/dokploy.sh
 
 require multipass curl jq openssl
 
@@ -34,19 +37,6 @@ CP_IP="$(vm_ip "$CP_NAME")"
 
 dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null \
   || { echo "cannot reach Dokploy API on $CP_IP — run 01-dokploy-api-key.sh first" >&2; exit 1; }
-
-cp_exec() {
-  # Bare `multipass exec` has been seen to hang indefinitely (see PLAN.md),
-  # so cap each call and retry on timeout. Only pass commands that are safe
-  # to run twice, since a timed-out call may still have gone through.
-  local attempt rc=0
-  for attempt in 1 2 3; do
-    with_timeout "${CP_EXEC_TIMEOUT:-60}" multipass exec "$CP_NAME" -- sudo "$@" && return 0 || rc=$?
-    [[ "$rc" -eq 124 ]] || return "$rc"
-    echo "  (multipass exec on $CP_NAME timed out, retry $attempt/3)" >&2
-  done
-  return 124
-}
 
 registry_status() {
   # HTTP status of the registry's API root as seen from the control plane:
@@ -92,95 +82,19 @@ else
     docker image rm httpd:2-alpine >/dev/null 2>&1; exit \$rc"
 fi
 
-# --- compose file ------------------------------------------------------------
-
-COMPOSE_FILE="$(cat <<EOF
-services:
-  registry:
-    image: registry:3
-    environment:
-      REGISTRY_AUTH: htpasswd
-      REGISTRY_AUTH_HTPASSWD_REALM: Registry
-      REGISTRY_AUTH_HTPASSWD_PATH: /auth/htpasswd
-      # Lets image deletes through the API, so 'registry garbage-collect'
-      # can actually free disk later on.
-      REGISTRY_STORAGE_DELETE_ENABLED: "true"
-    ports:
-      # Routing mesh (ingress): reachable on 127.0.0.1:${REGISTRY_PORT} from every node.
-      - target: 5000
-        published: ${REGISTRY_PORT}
-        protocol: tcp
-        mode: ingress
-    volumes:
-      - registry-data:/var/lib/registry
-    configs:
-      - source: htpasswd
-        target: /auth/htpasswd
-    deploy:
-      replicas: 1
-      placement:
-        # registry-data is node-local: pin to the manager (the control
-        # plane) so the task never lands on an empty volume elsewhere.
-        constraints:
-          - node.role == manager
-      restart_policy:
-        condition: any
-
-volumes:
-  registry-data:
-
-configs:
-  htpasswd:
-    external: true
-    name: ${HTPASSWD_CONFIG}
-EOF
-)"
-
 # --- Dokploy project + compose resource --------------------------------------
 
-projects="$(dokploy_api "$CP_IP" "project.all")"
-ENV_ID="$(jq -r --arg p "$PROJECT_NAME" \
-  'first(.[] | select(.name == $p) | .environments[0].environmentId) // empty' <<<"$projects")"
+# Rendered into a variable first: a failed render inside a command argument
+# wouldn't trip set -e.
+COMPOSE_FILE="$(render_template "$STACKS_DIR/registry.yml" REGISTRY_PORT HTPASSWD_CONFIG)"
+dokploy_stack_sync "$CP_IP" "$PROJECT_NAME" "$COMPOSE_NAME" \
+  "Container registry, pinned to the manager node" "$COMPOSE_FILE"
 
-if [[ -n "$ENV_ID" ]]; then
-  echo "== Dokploy project '$PROJECT_NAME' already exists"
-else
-  echo "== creating Dokploy project '$PROJECT_NAME'"
-  ENV_ID="$(dokploy_api "$CP_IP" "project.create" -X POST -H 'Content-Type: application/json' \
-    -d "$(jq -n --arg n "$PROJECT_NAME" '{name: $n, description: "Cluster infrastructure services"}')" \
-    | jq -r '.environment.environmentId // empty')"
-  [[ -n "$ENV_ID" ]] || { echo "project.create returned no environment id" >&2; exit 1; }
-fi
-
-COMPOSE_ID="$(jq -r --arg p "$PROJECT_NAME" --arg c "$COMPOSE_NAME" \
-  'first(.[] | select(.name == $p) | .environments[].compose[] | select(.name == $c) | .composeId) // empty' <<<"$projects")"
-
-if [[ -n "$COMPOSE_ID" ]]; then
-  echo "== Dokploy compose '$COMPOSE_NAME' already exists"
-else
-  echo "== creating Dokploy compose '$COMPOSE_NAME' (type: stack)"
-  COMPOSE_ID="$(dokploy_api "$CP_IP" "compose.create" -X POST -H 'Content-Type: application/json' \
-    -d "$(jq -n --arg n "$COMPOSE_NAME" --arg e "$ENV_ID" \
-      '{name: $n, appName: $n, environmentId: $e, composeType: "stack", sourceType: "raw",
-        description: "Container registry, pinned to the manager node"}')" \
-    | jq -r '.composeId // empty')"
-  [[ -n "$COMPOSE_ID" ]] || { echo "compose.create returned no compose id" >&2; exit 1; }
-fi
-
-compose="$(dokploy_api "$CP_IP" "compose.one" -G --data-urlencode "composeId=${COMPOSE_ID}")"
-# Dokploy suffixes appName with a random id; it's also the Swarm stack name.
-STACK_NAME="$(jq -r '.appName' <<<"$compose")"
-current_file="$(jq -r '.composeFile // ""' <<<"$compose")"
-
-if [[ "$current_file" == "$COMPOSE_FILE" && "$(registry_status)" == 401 ]]; then
+if [[ "$STACK_CHANGED" == 0 && "$(registry_status)" == 401 ]]; then
   echo "== registry already deployed and up to date, skipping deploy"
 else
   echo "== deploying registry stack"
-  dokploy_api "$CP_IP" "compose.update" -X POST -H 'Content-Type: application/json' \
-    -d "$(jq -n --arg id "$COMPOSE_ID" --arg f "$COMPOSE_FILE" \
-      '{composeId: $id, composeFile: $f, composeType: "stack", sourceType: "raw"}')" >/dev/null
-  dokploy_api "$CP_IP" "compose.deploy" -X POST -H 'Content-Type: application/json' \
-    -d "$(jq -n --arg id "$COMPOSE_ID" '{composeId: $id}')" >/dev/null
+  dokploy_stack_deploy "$CP_IP" "$STACK_COMPOSE_ID"
 
   # compose.deploy only queues the deployment, so wait for the registry itself.
   echo "== waiting for registry on ${REGISTRY_ADDR}"

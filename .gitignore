@@ -3,3 +3,4 @@
 forward.sh
 .forward.pid
 .registry-credentials
+.github-runner.env
