@@ -26,9 +26,9 @@ fi
 
 multipass delete --purge "${names[@]}"
 
-# Only does anything if forward.sh (gitignored, WSL-only) ever started a
-# forwarder - which would otherwise keep holding its port, pointed at a
-# control-plane IP that no longer exists.
+# Only does anything if forward.sh (gitignored, WSL-only) started forwarders - which
+# would otherwise keep holding their ports, pointed at a control-plane IP
+# that no longer exists.
 stop_forwarder
 
 # The API key is tied to the specific Dokploy instance that issued it - once
@@ -47,6 +47,13 @@ fi
 if [[ -f "$REGISTRY_CREDS_FILE" ]]; then
   rm -f "$REGISTRY_CREDS_FILE"
   echo "== removed $REGISTRY_CREDS_FILE"
+fi
+
+# And the web app's admin: its database died too, so the next
+# 06-deploy-web-app.sh creates a fresh admin with a new password.
+if [[ -f "$WEB_APP_CREDS_FILE" ]]; then
+  rm -f "$WEB_APP_CREDS_FILE"
+  echo "== removed $WEB_APP_CREDS_FILE"
 fi
 
 echo "== teardown complete"
