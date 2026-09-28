@@ -57,10 +57,11 @@ echo "== spinning up control plane + $WORKERS worker(s)"
 ./00-launch-cp-vm.sh --cpus "$CPUS" --mem "$MEM" --disk "$CP_DISK"
 
 # forward.sh is a gitignored, WSL-only local helper (see the script itself)
-# - run it if present, so Dokploy is reachable from Windows before 01 needs
-# the browser. Not fatal: the cluster itself is fine without it.
+# - run it if present, so Dokploy and the apps are reachable from Windows,
+# Dokploy already before 01 needs the browser. Not fatal: the cluster
+# itself is fine without it.
 if [[ -x ./forward.sh ]]; then
-  ./forward.sh || echo "== warning: ./forward.sh failed, Dokploy is not forwarded to localhost" >&2
+  ./forward.sh || echo "== warning: ./forward.sh failed, Dokploy and the apps are not forwarded to localhost" >&2
 fi
 
 if ! ./01-dokploy-api-key.sh; then
@@ -74,5 +75,6 @@ fi
 ./02-launch-worker-vms.sh --workers "$WORKERS" --cpus "$CPUS" --mem "$MEM" --disk "$DISK"
 ./03-setup-registry.sh
 ./04-deploy-core-services.sh
+./05-deploy-web-app.sh
 
-echo "== cluster up: $((WORKERS + 1)) nodes"
+echo "== cluster up: $((WORKERS + 1)) nodes, with the Roster web app deployed"

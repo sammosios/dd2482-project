@@ -18,11 +18,10 @@ dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null \
   || { echo "cannot reach Dokploy API on $CP_IP — run 01-dokploy-api-key.sh first" >&2; exit 1; }
 
 echo "== core service deployment not yet implemented, see PLAN.md 'Core services'"
-echo "   (docker registry: see 03-setup-registry.sh)"
+echo "   (docker registry: see 03-setup-registry.sh; example web app + database: see 05-deploy-web-app.sh)"
 echo "   TODO: s3 compatible storage"
 echo "   TODO: CI runner(s)"
 echo "   TODO: secrets vault"
 echo "== other services tbi:"
-echo "   TODO: full-stack web application"
 echo "   TODO: observability pipeline"
 echo "   TODO: Trivy scanning"

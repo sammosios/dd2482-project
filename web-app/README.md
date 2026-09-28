@@ -45,6 +45,10 @@ All through environment variables:
 | `views.go`, `icons.go` | Templates, static files (embedded in the binary), [Lucide](https://lucide.dev) icons |
 | `templates/`, `static/` | HTML, CSS, a little JS. `static/htmx.min.js` is htmx 2.0.11, vendored so the app has no CDN dependency. |
 
+## On the cluster
+
+`./05-deploy-web-app.sh` (from the repo root, also run by `bootstrap.sh`) builds the image of the last commit that touched this directory, pushes it to the cluster registry as `roster:<commit>`, and deploys it through Dokploy with its database. Re-run it after committing a change to redeploy. Why it's done this way, rather than with Dokploy's own Git builds, is in DESIGN.md.
+
 ## Running it locally
 
 You need Go 1.26+ and a Postgres, for example:

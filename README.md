@@ -5,7 +5,7 @@ Reproducible Multipass VMs → Docker Swarm → [Dokploy](https://dokploy.com/) 
 ## Requirements
 
 - [Multipass](https://multipass.run/) — provisions the VMs
-- `curl`, `jq`
+- `curl`, `jq`, `git`, `openssl`
 - **bash 4+** — macOS ships bash 3.2 by default, which is too old (`teardown.sh` uses `mapfile`, a bash 4+ builtin). Install a newer one (e.g. `brew install bash`) and make sure it's first in `PATH`; check with `bash --version`.
 - ~2 CPU cores / ~2GB RAM per VM you plan to run (control plane + each worker). Disks are 10G per worker and 30G for the control plane (`--cp-disk`), which holds the image builds and the registry. Multipass disks are sparse, so they only use host space as they fill. — `bootstrap.sh` estimates how many workers your machine can handle if you don't pass a count.
 - If running from Windows: see PLAN.md's "Host OS notes" before using WSL2 — there's a real networking gap to know about first.
@@ -24,11 +24,14 @@ Fill in `DOKPLOY_ADMIN_NAME` / `DOKPLOY_ADMIN_EMAIL` / `DOKPLOY_ADMIN_PASSWORD` 
 ./bootstrap.sh 3        # bring up control plane + 3 workers (mandatory worker count,
                          # prompted with a device-capacity estimate if omitted)
 ./teardown.sh            # tear everything down (prompts for confirmation; -y to skip)
+./05-deploy-web-app.sh   # redeploy the web app after committing a change to web-app/
 ```
 
 Both are safe to re-run. `bootstrap.sh` is idempotent — re-running it with the same or a higher worker count skips anything already up and only adds what's missing. **Known limitation**: re-running with a *lower* worker count does not scale down — extra workers are left running (see PLAN.md).
 
-Each phase is also its own standalone script if you need finer control: `00-launch-cp-vm.sh` → `01-dokploy-api-key.sh` → `02-launch-worker-vms.sh` → `03-setup-registry.sh` → `04-deploy-core-services.sh`. `bootstrap.sh` just chains these.
+Each phase is also its own standalone script if you need finer control: `00-launch-cp-vm.sh` → `01-dokploy-api-key.sh` → `02-launch-worker-vms.sh` → `03-setup-registry.sh` → `04-deploy-core-services.sh` → `05-deploy-web-app.sh`. `bootstrap.sh` just chains these.
+
+**Running inside WSL:** Windows has no route to the VMs. A local forwarder, `forward.sh` (gitignored, since only WSL setups need it), fixes that: forwarding `localhost:3000` to Dokploy and `localhost:8081` to Traefik makes Dokploy and every app with a `*.localhost` domain reachable from Windows, e.g. `http://roster.localhost:8081` (see DESIGN.md). `bootstrap.sh` runs it if present, and `teardown.sh` stops it.
 
 ## What to expect right now
 
@@ -38,6 +41,7 @@ After `./bootstrap.sh N` finishes:
 - A Docker Swarm with the control plane as manager and all `N` workers `Ready`/`Active` (`docker node ls` on the control plane)
 - Dokploy reachable at `http://<control-plane-ip>:3000`, logged in with the admin account from `.dokploy-admin.env`
 - A container registry at `127.0.0.1:5000` on every node, pinned to the control plane and registered in Dokploy as `cluster-registry`. Its credentials are in `.registry-credentials` (gitignored).
-- **No application services deployed yet** — `04-deploy-core-services.sh` is still a stub. The core service set (CI runner, example app, database, secrets vault, Trivy scanning) is designed but not yet implemented; see PLAN.md's "Core services" checklist.
+- The example web app, **Roster** ([`web-app/`](./web-app)), in the Dokploy project `roster`: 2 replicas of the image `127.0.0.1:5000/roster:<commit>`, plus its own PostgreSQL service. It's at `http://roster.localhost:8081` from Windows (while `forward.sh` runs), or `http://roster.<control-plane-ip>.sslip.io` wherever the VM network is reachable. The first admin's password is in `.web-app-credentials` (gitignored). To redeploy after committing a change to `web-app/`, run `./05-deploy-web-app.sh`; it builds and pushes the new image and rolls the replicas over one by one.
+- `04-deploy-core-services.sh` is still a stub: the rest of the core service set (CI runner, secrets vault, Trivy scanning) is designed but not yet implemented; see PLAN.md's "Core services" checklist.
 
 `./teardown.sh` returns you to a clean slate — no VMs, no stale local credentials.
