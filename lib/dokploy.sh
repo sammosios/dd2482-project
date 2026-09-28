@@ -29,7 +29,7 @@ render_template() {
 }
 
 dokploy_stack_sync() {
-  # dokploy_stack_sync <cp_ip> <project> <compose name> <description> <compose file>
+  # dokploy_stack_sync <project> <compose name> <description> <compose file>
   # Makes sure Dokploy has <project> containing a stack-type, raw-source
   # compose resource <compose name> whose file is exactly <compose file>,
   # creating either if missing. Does not deploy. Sets:
@@ -38,10 +38,10 @@ dokploy_stack_sync() {
   #                       is also the Swarm stack name: services are
   #                       ${STACK_NAME}_<service>
   #   STACK_CHANGED     - 1 if the file was (re)uploaded, i.e. a deploy is due
-  local ip="$1" project="$2" name="$3" description="$4" file="$5"
+  local project="$1" name="$2" description="$3" file="$4"
   local projects env_id compose current
 
-  projects="$(dokploy_api "$ip" "project.all")"
+  projects="$(dokploy_api "project.all")"
   env_id="$(jq -r --arg p "$project" \
     'first(.[] | select(.name == $p) | .environments[0].environmentId) // empty' <<<"$projects")"
 
@@ -49,7 +49,7 @@ dokploy_stack_sync() {
     echo "== Dokploy project '$project' already exists"
   else
     echo "== creating Dokploy project '$project'"
-    env_id="$(dokploy_api "$ip" "project.create" -X POST -H 'Content-Type: application/json' \
+    env_id="$(dokploy_api "project.create" -X POST -H 'Content-Type: application/json' \
       -d "$(jq -n --arg n "$project" '{name: $n, description: "Cluster infrastructure services"}')" \
       | jq -r '.environment.environmentId // empty')"
     [[ -n "$env_id" ]] || { echo "project.create returned no environment id" >&2; return 1; }
@@ -62,14 +62,14 @@ dokploy_stack_sync() {
     echo "== Dokploy compose '$name' already exists"
   else
     echo "== creating Dokploy compose '$name' (type: stack)"
-    STACK_COMPOSE_ID="$(dokploy_api "$ip" "compose.create" -X POST -H 'Content-Type: application/json' \
+    STACK_COMPOSE_ID="$(dokploy_api "compose.create" -X POST -H 'Content-Type: application/json' \
       -d "$(jq -n --arg n "$name" --arg e "$env_id" --arg d "$description" \
         '{name: $n, appName: $n, environmentId: $e, composeType: "stack", sourceType: "raw", description: $d}')" \
       | jq -r '.composeId // empty')"
     [[ -n "$STACK_COMPOSE_ID" ]] || { echo "compose.create returned no compose id" >&2; return 1; }
   fi
 
-  compose="$(dokploy_api "$ip" "compose.one" -G --data-urlencode "composeId=${STACK_COMPOSE_ID}")"
+  compose="$(dokploy_api "compose.one" -G --data-urlencode "composeId=${STACK_COMPOSE_ID}")"
   STACK_NAME="$(jq -r '.appName' <<<"$compose")"
   current="$(jq -r '.composeFile // ""' <<<"$compose")"
 
@@ -77,7 +77,7 @@ dokploy_stack_sync() {
     STACK_CHANGED=0
   else
     echo "== uploading compose file for '$name'"
-    dokploy_api "$ip" "compose.update" -X POST -H 'Content-Type: application/json' \
+    dokploy_api "compose.update" -X POST -H 'Content-Type: application/json' \
       -d "$(jq -n --arg id "$STACK_COMPOSE_ID" --arg f "$file" \
         '{composeId: $id, composeFile: $f, composeType: "stack", sourceType: "raw"}')" >/dev/null
     STACK_CHANGED=1
@@ -85,8 +85,8 @@ dokploy_stack_sync() {
 }
 
 dokploy_stack_deploy() {
-  # dokploy_stack_deploy <cp_ip> <compose id> - queues a deployment. Returns
+  # dokploy_stack_deploy <compose id> - queues a deployment. Returns
   # before the stack is up; callers wait on their own health check.
-  dokploy_api "$1" "compose.deploy" -X POST -H 'Content-Type: application/json' \
-    -d "$(jq -n --arg id "$2" '{composeId: $id}')" >/dev/null
+  dokploy_api "compose.deploy" -X POST -H 'Content-Type: application/json' \
+    -d "$(jq -n --arg id "$1" '{composeId: $id}')" >/dev/null
 }

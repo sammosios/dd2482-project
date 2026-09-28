@@ -85,14 +85,14 @@ fi
 # Rendered into a variable first: a failed render inside a command argument
 # wouldn't trip set -e.
 COMPOSE_FILE="$(render_template "$STACKS_DIR/registry.yml" REGISTRY_PORT HTPASSWD_CONFIG)"
-dokploy_stack_sync "$CP_IP" "$PROJECT_NAME" "$COMPOSE_NAME" \
+dokploy_stack_sync "$PROJECT_NAME" "$COMPOSE_NAME" \
   "Container registry, pinned to the manager node" "$COMPOSE_FILE"
 
 if [[ "$STACK_CHANGED" == 0 && "$(registry_status)" == 401 ]]; then
   echo "== registry already deployed and up to date, skipping deploy"
 else
   echo "== deploying registry stack"
-  dokploy_stack_deploy "$CP_IP" "$STACK_COMPOSE_ID"
+  dokploy_stack_deploy "$STACK_COMPOSE_ID"
 
   # compose.deploy only queues the deployment, so wait for the registry itself.
   echo "== waiting for registry on ${REGISTRY_ADDR}"
@@ -108,7 +108,7 @@ fi
 
 # registry.create/update run `docker login` against the registry straight
 # away, which is why this comes after the deploy, not before.
-REGISTRY_ID="$(dokploy_api "$CP_IP" "registry.all" \
+REGISTRY_ID="$(dokploy_api "registry.all" \
   | jq -r --arg u "$REGISTRY_ADDR" 'first(.[] | select(.registryUrl == $u) | .registryId) // empty')"
 
 registry_body="$(jq -n --arg u "$REGISTRY_USER" --arg p "$REGISTRY_PASS" --arg url "$REGISTRY_ADDR" \
@@ -117,11 +117,11 @@ registry_body="$(jq -n --arg u "$REGISTRY_USER" --arg p "$REGISTRY_PASS" --arg u
 
 if [[ -n "$REGISTRY_ID" ]]; then
   echo "== registry already registered in Dokploy, syncing credentials"
-  dokploy_api "$CP_IP" "registry.update" -X POST -H 'Content-Type: application/json' \
+  dokploy_api "registry.update" -X POST -H 'Content-Type: application/json' \
     -d "$(jq --arg id "$REGISTRY_ID" '. + {registryId: $id}' <<<"$registry_body")" >/dev/null
 else
   echo "== registering ${REGISTRY_ADDR} in Dokploy"
-  dokploy_api "$CP_IP" "registry.create" -X POST -H 'Content-Type: application/json' \
+  dokploy_api "registry.create" -X POST -H 'Content-Type: application/json' \
     -d "$registry_body" >/dev/null
 fi
 

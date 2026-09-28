@@ -30,9 +30,11 @@ fi
 remote/02-join-workers.sh
 remote/03-setup-registry.sh
 
-# Runners need a GitHub PAT, which not everyone bringing up a cluster has -
-# skip them rather than fail the whole chain.
-if [[ -n "${GITHUB_RUNNER_PAT:-}" || -f .github-runner.env ]]; then
+# Runners need a GitHub PAT, which not everyone bringing up a cluster has,
+# and workers to run on - skip them rather than fail the whole chain.
+if [[ -z "$(worker_nodes)" ]]; then
+  echo "== skipping CI runners: no WORKER_HOSTS, and runners only run on workers"
+elif [[ -n "${GITHUB_RUNNER_PAT:-}" || -f .github-runner.env ]]; then
   remote/04-setup-ci-runner.sh
 else
   echo "== skipping CI runners: no GITHUB_RUNNER_PAT or .github-runner.env (see .github-runner.env.example)"

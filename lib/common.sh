@@ -17,6 +17,11 @@
 #   node_ip <node>               - the IPv4 address this machine reaches it on
 #   cp_swarm_addr                - the address workers reach the control
 #                                  plane on (Swarm's advertise address)
+#   cp_connect                   - sets DOKPLOY_URL, REGISTRY_URL and
+#                                  OPENBAO_URL: where this machine reaches
+#                                  those services on the control plane
+#   cp_ui_hint <port> <path>     - how a person opens one of them in a
+#                                  browser
 #   node_wait_ready <node>       - blocks until it's reachable and cloud-init
 #                                  (if any) is done
 #   node_run <node> <cmd...>     - runs a command as root there, uncapped,
@@ -82,23 +87,39 @@ env_file_value() {
 with_timeout() {
   # Portable stand-in for GNU `timeout` (not present by default on macOS,
   # and coreutils isn't a dependency we want to require). Runs "$@" (a
-  # command or a shell function), prints its combined output, returns its
-  # exit code, or 124 on timeout. No stdin: it runs in the background.
-  local secs="$1" tmp pid i=0; shift
-  tmp="$(mktemp)"
-  ( "$@" >"$tmp" 2>&1 ) &
+  # command or a shell function), prints its output and errors (kept apart,
+  # so warnings never end up in a captured value), returns its exit code,
+  # or 124 on timeout. No stdin: it runs in the background.
+  local secs="$1" out err pid i=0 rc=0; shift
+  out="$(mktemp)"; err="$(mktemp)"
+  ( "$@" >"$out" 2>"$err" ) &
   pid=$!
   while kill -0 "$pid" 2>/dev/null; do
     if (( i >= secs )); then
-      kill -9 "$pid" 2>/dev/null
-      cat "$tmp"; rm -f "$tmp"
+      # Its children too (e.g. the ssh a function ran), which would
+      # otherwise live on: found first, killed after it, so it can't
+      # report their deaths.
+      local kids
+      kids="$(pgrep -P "$pid" 2>/dev/null || true)"
+      kill -9 "$pid" 2>/dev/null || true
+      [[ -z "$kids" ]] || kill -9 $kids 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      cat "$out"; cat "$err" >&2; rm -f "$out" "$err"
       return 124
     fi
     sleep 1; i=$((i + 1))
   done
-  wait "$pid"; local rc=$?
-  cat "$tmp"; rm -f "$tmp"
+  wait "$pid" || rc=$?
+  cat "$out"; cat "$err" >&2; rm -f "$out" "$err"
   return $rc
+}
+
+ON_EXIT=()
+on_exit() {
+  # on_exit <command> - runs it when the script exits, after any registered
+  # before it. A plain `trap ... EXIT` would replace the others.
+  ON_EXIT+=("$1")
+  trap 'for _c in "${ON_EXIT[@]}"; do eval "$_c" || true; done' EXIT
 }
 
 source "$TARGET_DIR/lib/target.sh"
@@ -125,17 +146,42 @@ cp_exec() {
 }
 
 load_cp() {
-  # Sets CP_NODE and CP_IP, or exits if the control plane doesn't exist.
+  # Sets CP_NODE and CP_IP, and DOKPLOY_URL, REGISTRY_URL and OPENBAO_URL
+  # (cp_connect), or exits if the control plane doesn't exist.
   CP_NODE="$(cp_node)"
   node_exists "$CP_NODE" \
     || { echo "control plane not found — run $CLUSTER_TARGET/$TARGET_CP_SCRIPT first" >&2; exit 1; }
   CP_IP="$(node_ip "$CP_NODE")"
+  cp_connect
 }
 
 require_dokploy_api() {
   # Confirms Dokploy is reachable and the API key works. Needs load_cp.
-  dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null \
-    || { echo "cannot reach Dokploy API on $CP_IP — run $CLUSTER_TARGET/01-dokploy-api-key.sh first" >&2; exit 1; }
+  dokploy_api "cluster.getNodes" >/dev/null \
+    || { echo "cannot reach Dokploy API at $DOKPLOY_URL — run $CLUSTER_TARGET/01-dokploy-api-key.sh first" >&2; exit 1; }
+}
+
+node_run_apt() {
+  # node_run_apt <node> <shell command> - runs a command that installs
+  # packages. A fresh Ubuntu server starts its daily apt run within minutes
+  # of booting, and an installer that meets its lock fails outright: pause
+  # the timers, wait for a run in progress, and let apt itself wait on the
+  # lock (DPkg::Lock::Timeout) for anything that still slips in.
+  local node="$1" cmd="$2" prelude
+  prelude='
+set -eo pipefail
+systemctl stop apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+apt_conf="$(mktemp)"
+trap '"'"'systemctl start apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true; rm -f "$apt_conf"'"'"' EXIT
+for _ in $(seq 1 120); do
+  systemctl is-active --quiet apt-daily.service apt-daily-upgrade.service || break
+  echo "  (waiting for the system'"'"'s own apt run to finish)" >&2
+  sleep 5
+done
+echo "DPkg::Lock::Timeout \"600\";" >"$apt_conf"
+export APT_CONFIG="$apt_conf" DEBIAN_FRONTEND=noninteractive
+'
+  node_run "$node" bash -c "${prelude}${cmd}"
 }
 
 ensure_docker() {
@@ -146,40 +192,61 @@ ensure_docker() {
     return 0
   fi
   echo "  installing docker on $node"
-  node_run "$node" bash -c 'curl -fsSL https://get.docker.com | sh'
+  node_run_apt "$node" 'curl -fsSL https://get.docker.com | sh'
+}
+
+check_container_dns() {
+  # check_container_dns <node> - containers get their DNS servers from
+  # Docker, not from the node, and when none of the node's are usable in a
+  # container, builds fail minutes in on the first download. Fail here
+  # instead, saying why.
+  local node="$1"
+  echo "== checking DNS inside containers on $node"
+  if NODE_EXEC_TIMEOUT=180 node_exec "$node" sh -c \
+      'docker pull -q busybox:1.37 >/dev/null && docker run --rm busybox:1.37 nslookup -type=a proxy.golang.org >/dev/null; rc=$?; docker image rm busybox:1.37 >/dev/null 2>&1; exit $rc'; then
+    return 0
+  fi
+  echo "containers on $node can't resolve names. Their DNS servers are the node's upstream ones:" >&2
+  node_exec "$node" sh -c 'grep ^nameserver /run/systemd/resolve/resolv.conf 2>/dev/null || grep ^nameserver /etc/resolv.conf' >&2 || true
+  echo "check that those answer from inside a container (e.g. no firewall on outbound port 53), or set \"dns\" in /etc/docker/daemon.json on $node and restart docker" >&2
+  return 1
 }
 
 dokploy_port_open() {
-  curl -s -o /dev/null -m 2 "http://${1}:${DOKPLOY_PORT}"
+  curl -s -o /dev/null -m 2 "$DOKPLOY_URL"
 }
 
 install_dokploy() {
-  # Installs Dokploy on the control plane, unless it's already answering.
-  # Its installer runs `docker swarm init` itself, so no manual swarm
+  # Installs Dokploy on the control plane, unless it's already there. Its
+  # installer runs `docker swarm init` itself, so no manual swarm
   # bootstrap. Needs load_cp.
-  if dokploy_port_open "$CP_IP"; then
-    echo "== Dokploy already responding on ${CP_IP}:${DOKPLOY_PORT}, skipping install"
-    return 0
+  #
+  # Checked on the node, not by whether the port answers from here: the
+  # installer starts with `docker swarm leave --force`, so re-running it
+  # because a firewall hid a running Dokploy would throw every worker out
+  # of the swarm.
+  if node_exec "$CP_NODE" sh -c 'command -v docker >/dev/null && docker service inspect dokploy >/dev/null 2>&1'; then
+    echo "== Dokploy already installed on $CP_NODE, skipping install"
+  else
+    local addr
+    addr="$(cp_swarm_addr)"
+    echo "== installing Dokploy on $CP_NODE ($CP_IP, swarm address $addr)"
+    # Pin ADVERTISE_ADDR explicitly so Dokploy's own IP auto-detection (the
+    # source of the #4517 join-command bug) never gets a chance to guess
+    # wrong. Passed inline, not via `export`, since sudo resets the
+    # environment otherwise.
+    node_run_apt "$CP_NODE" "curl -fsSL https://dokploy.com/install.sh | ADVERTISE_ADDR=${addr} sh"
   fi
 
-  local addr
-  addr="$(cp_swarm_addr)"
-  echo "== installing Dokploy on $CP_NODE ($CP_IP, swarm address $addr)"
-  # Pin ADVERTISE_ADDR explicitly so Dokploy's own IP auto-detection (the
-  # source of the #4517 join-command bug) never gets a chance to guess
-  # wrong. Passed inline, not via `export`, since sudo resets the
-  # environment otherwise.
-  node_run "$CP_NODE" bash -c "curl -fsSL https://dokploy.com/install.sh | ADVERTISE_ADDR=${addr} sh"
-
-  echo "== waiting for Dokploy to come up on port ${DOKPLOY_PORT}"
+  echo "== waiting for Dokploy to answer at $DOKPLOY_URL"
   for _ in $(seq 1 60); do
-    dokploy_port_open "$CP_IP" && return 0
+    dokploy_port_open && return 0
     sleep 5
   done
   if node_exec "$CP_NODE" curl -s -o /dev/null -m 2 "http://127.0.0.1:${DOKPLOY_PORT}" >/dev/null 2>&1; then
-    echo "Dokploy is running on $CP_NODE, but ${CP_IP}:${DOKPLOY_PORT} isn't reachable from here — check the firewall" >&2
+    echo "Dokploy is running on $CP_NODE, but $DOKPLOY_URL isn't reachable from here — check the firewall" >&2
   else
-    echo "Dokploy did not come up after 5 minutes" >&2
+    echo "Dokploy did not come up after 5 minutes: $(node_hint "$CP_NODE") docker service ps dokploy --no-trunc" >&2
   fi
   exit 1
 }
@@ -198,7 +265,7 @@ join_worker() {
 
   echo "== fetching worker join command from Dokploy (cluster.addWorker) for $node"
   local resp
-  resp="$(dokploy_api "$CP_IP" "cluster.addWorker")"
+  resp="$(dokploy_api "cluster.addWorker")"
 
   # NOTE: exact response field is unconfirmed until we hit a live instance -
   # try the likely field names, fall back to grepping the raw command out of
@@ -239,11 +306,13 @@ dokploy_api_key() {
 }
 
 dokploy_api() {
-  # dokploy_api <cp_ip> <endpoint> [extra curl args...]
+  # dokploy_api <endpoint> [extra curl args...] - needs load_cp.
   # -f: without this, curl exits 0 on any HTTP response including 401/403/5xx
   # (only transport-level failures count), so a rejected/expired API key
   # would silently read as "success" to every caller checking the exit code.
-  local ip="$1" endpoint="$2"; shift 2
-  curl -sSf -H "x-api-key: $(dokploy_api_key)" \
-    "http://${ip}:${DOKPLOY_PORT}/api/${endpoint}" "$@"
+  # The key goes in through a file descriptor rather than argv, so it
+  # doesn't show up in `ps`.
+  local endpoint="$1"; shift
+  curl -sSf -H @<(printf 'x-api-key: %s\n' "$(dokploy_api_key)") \
+    "${DOKPLOY_URL}/api/${endpoint}" "$@"
 }

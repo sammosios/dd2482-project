@@ -23,14 +23,14 @@ bash
 CLUSTER_TARGET=local   # or remote: which cluster, as in local/ and remote/
 source lib/common.sh
 source lib/openbao.sh
-load_cp                # sets CP_IP
+load_cp                # finds the control plane; for remote, opens an ssh tunnel to it until this shell exits
 
 NAME=myapp   # lowercase letters, digits and dashes, max 40 chars; not "infrastructure"
 POLICY="${OPENBAO_POLICY_PREFIX}${NAME}"
 PROVIDER="bao-${NAME}"
 
 # Both should succeed: Dokploy API reachable, OpenBao unsealed (200)
-dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null && echo dokploy ok
+dokploy_api "cluster.getNodes" >/dev/null && echo dokploy ok
 bao_status
 ```
 
@@ -41,10 +41,10 @@ The name ends up as a KV path segment, a policy name and part of a Dokploy provi
 Skip this step if the project already exists. `project.create` doesn't return the ID reliably, so look it up afterwards:
 
 ```bash
-dokploy_api "$CP_IP" "project.create" -X POST -H 'Content-Type: application/json' \
+dokploy_api "project.create" -X POST -H 'Content-Type: application/json' \
   -d "$(jq -n --arg n "$NAME" '{name: $n, description: "App project"}')" >/dev/null
 
-PROJECT_ID="$(dokploy_api "$CP_IP" "project.all" \
+PROJECT_ID="$(dokploy_api "project.all" \
   | jq -r --arg p "$NAME" 'first(.[] | select(.name == $p) | .projectId) // empty')"
 echo "$PROJECT_ID"
 ```
@@ -81,7 +81,7 @@ bao_api "sys/policies/acl/${POLICY}" -X PUT \
 First check whether the provider already exists. If it does, stop here: its token is masked in Dokploy, so there's nothing to compare against.
 
 ```bash
-dokploy_api "$CP_IP" "vaultProvider.all" \
+dokploy_api "vaultProvider.all" \
   | jq -r --arg n "$PROVIDER" 'first(.[] | select(.name == $n) | .vaultProviderId) // empty'
 ```
 
@@ -100,14 +100,14 @@ config="$(jq -n --arg u "$OPENBAO_INTERNAL_URL" --arg t "$TOKEN" --arg m "$OPENB
 Test the connection. The test runs from Dokploy's server, so it also proves Dokploy can reach `http://openbao:8200` over `dokploy-network`:
 
 ```bash
-dokploy_api "$CP_IP" "vaultProvider.testConnection" -X POST -H 'Content-Type: application/json' \
+dokploy_api "vaultProvider.testConnection" -X POST -H 'Content-Type: application/json' \
   -d "$(jq -n --argjson c "$config" '{config: $c}')"
 ```
 
 Create the provider, assigned to this project only:
 
 ```bash
-dokploy_api "$CP_IP" "vaultProvider.create" -X POST -H 'Content-Type: application/json' \
+dokploy_api "vaultProvider.create" -X POST -H 'Content-Type: application/json' \
   -d "$(jq -n --arg n "$PROVIDER" --argjson c "$config" --arg p "$PROJECT_ID" \
     '{name: $n, config: $c, assignments: [{projectId: $p}]}')" >/dev/null
 unset TOKEN config
@@ -121,7 +121,7 @@ bao_api "auth/token/revoke" -X POST -d @<(jq -n --arg t "$TOKEN" '{token: $t}') 
 
 ## 4. Store secrets and reference them in the app
 
-Put secrets under `secret/<name>/...`, either in the OpenBao UI at `http://<CP_IP>:8200/ui` (log in with the root token from `.state/<target>/openbao-init.json`) or through the API:
+Put secrets under `secret/<name>/...`, either in the OpenBao UI at the address `cp_ui_hint "$OPENBAO_PORT" /ui` prints (log in with the root token from `.state/<target>/openbao-init.json`) or through the API:
 
 ```bash
 bao_api "${OPENBAO_KV_MOUNT}/data/${NAME}/app" -X POST \

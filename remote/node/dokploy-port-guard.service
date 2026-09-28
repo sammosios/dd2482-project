@@ -1,0 +1,15 @@
+# Installed by the remote chain (remote/lib/prepare.sh). Before Docker, so
+# its published ports are never open, not even for a moment at boot; part
+# of it, so a Docker restart re-applies the rules.
+[Unit]
+Description=Keep the cluster's internal ports off the network
+Before=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/dokploy-port-guard
+
+[Install]
+WantedBy=multi-user.target

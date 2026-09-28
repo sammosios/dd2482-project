@@ -34,14 +34,14 @@ require curl jq
 target_require
 load_cp
 
-dokploy_port_open "$CP_IP" \
-  || { echo "Dokploy not responding on ${CP_IP}:${DOKPLOY_PORT} — run $CLUSTER_TARGET/$TARGET_CP_SCRIPT first" >&2; exit 1; }
+dokploy_port_open \
+  || { echo "Dokploy not responding at $DOKPLOY_URL — run $CLUSTER_TARGET/$TARGET_CP_SCRIPT first" >&2; exit 1; }
 
 print_manual_instructions() {
   cat <<EOF
 
 == manual step required (one-time, first install only) ==
-1. Open http://${CP_IP}:${DOKPLOY_PORT} in a browser and create the admin account.
+1. Open $(cp_ui_hint "$DOKPLOY_PORT" /) and create the admin account.
 2. Go to Settings -> Profile -> API/CLI and generate an API token.
 3. Re-run: $CLUSTER_TARGET/01-dokploy-api-key.sh --api-key <token>
 
@@ -74,7 +74,7 @@ auto_provision() {
     exit 1
   fi
 
-  local base="http://${CP_IP}:${DOKPLOY_PORT}/api"
+  local base="${DOKPLOY_URL}/api"
   local cookie_jar body_file
   cookie_jar="$(mktemp)"; chmod 600 "$cookie_jar"
   body_file="$(mktemp)"
@@ -126,13 +126,13 @@ if [[ -z "$API_KEY" && ! -f "$API_KEY_FILE" && -z "${DOKPLOY_API_KEY:-}" ]]; the
 fi
 
 if [[ -n "$API_KEY" ]]; then
-  echo "$API_KEY" > "$API_KEY_FILE"
+  ( umask 077; echo "$API_KEY" >"$API_KEY_FILE" )
   echo "== saved API key to $API_KEY_FILE"
 fi
 
 if [[ -n "${DOKPLOY_API_KEY:-}" || -f "$API_KEY_FILE" ]]; then
   echo "== verifying API key against cluster.getNodes"
-  if dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null; then
+  if dokploy_api "cluster.getNodes" >/dev/null; then
     echo "== API key verified, ready for $CLUSTER_TARGET/$TARGET_WORKERS_SCRIPT"
   else
     echo "API key rejected by Dokploy — check it was generated correctly" >&2

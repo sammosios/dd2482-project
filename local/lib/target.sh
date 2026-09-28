@@ -70,6 +70,16 @@ node_ip() {
 # Multipass VMs share one network with each other and this machine.
 cp_swarm_addr() { node_ip "$CP_NAME"; }
 
+# That network is private to this machine, so talk to the control plane's
+# ports directly.
+cp_connect() {
+  DOKPLOY_URL="http://${CP_IP}:${DOKPLOY_PORT}"
+  REGISTRY_URL="http://${CP_IP}:${REGISTRY_PORT}"
+  OPENBAO_URL="http://${CP_IP}:${OPENBAO_PORT}"
+}
+
+cp_ui_hint() { echo "http://${CP_IP}:$1$2"; }
+
 node_run() {
   local node="$1"; shift
   multipass exec "$node" -- sudo "$@"

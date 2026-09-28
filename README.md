@@ -20,8 +20,8 @@ For `local/`:
 
 For `remote/`:
 
-- `ssh`, `scp`
-- One Ubuntu 24.04 server for the control plane (4GB RAM, 30G disk, as above) and any number of workers (2GB, 15G), with ssh access as a user with passwordless sudo, and the ports listed in [`remote/hosts.env.example`](./remote/hosts.env.example) open. Then:
+- `ssh`
+- One fresh Ubuntu 24.04 server for the control plane (2 vCPUs, 4GB RAM, 30G disk, as above) and any number of workers (2 vCPUs, 2GB, 15G), with ssh access as a user with passwordless sudo (a cloud image's `ubuntu` user, or `root`). The provider's firewall needs only ssh from your machine, 80/443 to the control plane, and Swarm's ports between the nodes: the chain closes everything else it runs itself, on each node, and reaches Dokploy, the registry and OpenBao through ssh. Details in [`remote/hosts.env.example`](./remote/hosts.env.example). Then:
 
   ```
   cp remote/hosts.env.example remote/hosts.env   # fill in CP_HOST, WORKER_HOSTS, SSH_USER
@@ -85,7 +85,7 @@ After `local/bootstrap.sh N` finishes (or `remote/bootstrap.sh`, on your servers
 
 - `N + 1` Multipass VMs running (`dokploy-control-plane`, `dokploy-worker-1..N`)
 - A Docker Swarm with the control plane as manager and all `N` workers `Ready`/`Active` (`docker node ls` on the control plane)
-- Dokploy reachable at `http://<control-plane-ip>:3000`, logged in with the admin account from `.dokploy-admin.env`
+- Dokploy reachable at `http://<control-plane-ip>:3000` (remote: only through an ssh tunnel, whose command `remote/00-install-dokploy.sh` prints), logged in with the admin account from `.dokploy-admin.env`
 - A container registry at `127.0.0.1:5000` on every node, pinned to the control plane and registered in Dokploy as `cluster-registry`. Its credentials are in `.state/<target>/registry-credentials` (gitignored).
 - One self-hosted GitHub Actions runner per worker, if a PAT is configured (see "Optional: CI runners" above). Target them with `runs-on: [self-hosted, dokploy]`.
 - The example web app, **Roster** ([`web-app/`](./web-app)), in the Dokploy project `roster`: 2 replicas, on the workers, of the image `127.0.0.1:5000/roster:<commit>`, plus its own PostgreSQL and Redis services (Redis holds the sign-in rate limiter's counters). It's at `http://roster.<control-plane-ip>.sslip.io` wherever the control plane is reachable, or `http://roster.localhost:8081` from Windows (while `local/forward.sh` runs). The first admin's password is in `.state/<target>/web-app-credentials` (gitignored). To redeploy after committing a change to `web-app/`, run `<target>/07-deploy-web-app.sh`; it builds and pushes the new image and rolls the replicas over one by one.

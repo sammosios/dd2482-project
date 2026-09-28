@@ -52,8 +52,8 @@ REGISTRY_PASS="$(env_file_value "$REGISTRY_CREDS_FILE" REGISTRY_PASSWORD)"
 LOCAL_HOST="roster.localhost"
 DIRECT_HOST="roster.${CP_IP}.sslip.io"
 
-api_get() { dokploy_api "$CP_IP" "$1" -G --data-urlencode "$2"; }
-api_post() { dokploy_api "$CP_IP" "$1" -X POST -H 'Content-Type: application/json' -d "$2"; }
+api_get() { dokploy_api "$1" -G --data-urlencode "$2"; }
+api_post() { dokploy_api "$1" -X POST -H 'Content-Type: application/json' -d "$2"; }
 
 # --- image ---------------------------------------------------------------------
 
@@ -68,13 +68,13 @@ if [[ -n "$(git status --porcelain -- web-app)" ]]; then
 fi
 
 registry_has_image() {
-  # Port 5000 is published on every node's IP (routing mesh), so ask the
-  # registry straight from here. Credentials go through stdin, not argv.
+  # Asked straight from here (REGISTRY_URL, see cp_connect in
+  # lib/common.sh). Credentials go through stdin, not argv.
   local code
   code="$(printf 'user = "%s:%s"\n' "$REGISTRY_USER" "$REGISTRY_PASS" \
     | curl -s -K - -I -m 10 -o /dev/null -w '%{http_code}' \
         -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
-        "http://${CP_IP}:${REGISTRY_PORT}/v2/roster/manifests/${TAG}" || true)"
+        "${REGISTRY_URL}/v2/roster/manifests/${TAG}" || true)"
   [[ "$code" == 200 ]]
 }
 
@@ -92,7 +92,7 @@ else
   # target: piping more than 2 MiB through `multipass exec` gets cut off
   # (PLAN.md), and the multipass snap can only read non-hidden files there.
   src="$(mktemp "${HOME}/roster-src-XXXXXX")"
-  trap 'rm -f "$src"' EXIT
+  on_exit "rm -f '$src'"
   git archive --format=tar -o "$src" "$TAG" web-app
   node_exec "$BUILD_NODE" rm -rf /tmp/roster-build /tmp/roster-src.tar
   node_copy "$src" "$BUILD_NODE" /tmp/roster-src.tar
@@ -110,7 +110,7 @@ fi
 
 # --- Dokploy project -----------------------------------------------------------
 
-projects="$(dokploy_api "$CP_IP" "project.all")"
+projects="$(dokploy_api "project.all")"
 ENV_ID="$(jq -r --arg p "$PROJECT_NAME" \
   'first(.[] | select(.name == $p) | .environments[0].environmentId) // empty' <<<"$projects")"
 if [[ -n "$ENV_ID" ]]; then
@@ -121,7 +121,7 @@ else
     '{name: $n, description: "Roster, the example web app, and its database"}')" \
     | jq -r '.environment.environmentId // empty')"
   [[ -n "$ENV_ID" ]] || { echo "project.create returned no environment id" >&2; exit 1; }
-  projects="$(dokploy_api "$CP_IP" "project.all")"
+  projects="$(dokploy_api "project.all")"
 fi
 environment="$(jq --arg e "$ENV_ID" 'first(.[].environments[] | select(.environmentId == $e))' <<<"$projects")"
 
@@ -385,7 +385,14 @@ for _ in $(seq 1 24); do
   fi
   sleep 5
 done
-[[ "$ok" -eq 1 ]] || { echo "the app doesn't answer through Traefik — see its Logs and Domains tabs in Dokploy" >&2; exit 1; }
+if [[ "$ok" -ne 1 ]]; then
+  if node_exec "$CP_NODE" curl -fs -m 5 -o /dev/null -H "Host: ${LOCAL_HOST}" http://127.0.0.1/readyz >/dev/null 2>&1; then
+    echo "the app answers on the control plane itself, but not on ${CP_IP}:80 from here — open port 80 in the firewall" >&2
+  else
+    echo "the app doesn't answer through Traefik — see its Logs and Domains tabs in Dokploy" >&2
+  fi
+  exit 1
+fi
 
 echo "== Roster is up: $APP_IMAGE, $REPLICAS replicas"
 if [[ "$CLUSTER_TARGET" == local && -x local/forward.sh ]]; then

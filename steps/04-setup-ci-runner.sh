@@ -126,14 +126,14 @@ fi
 
 COMPOSE_FILE="$(render_template "$STACKS_DIR/github-runner.yml" \
   RUNNER_IMAGE_TAG GITHUB_REPO_URL RUNNER_LABELS GITHUB_PAT_SECRET)"
-dokploy_stack_sync "$CP_IP" "$PROJECT_NAME" "$COMPOSE_NAME" \
+dokploy_stack_sync "$PROJECT_NAME" "$COMPOSE_NAME" \
   "Self-hosted GitHub Actions runners, one per worker" "$COMPOSE_FILE"
 
 if [[ "$STACK_CHANGED" == 0 && "$(online_runners)" -ge "$WORKER_COUNT" ]]; then
   echo "== runners already deployed and up to date, skipping deploy"
 else
   echo "== deploying runner stack"
-  dokploy_stack_deploy "$CP_IP" "$STACK_COMPOSE_ID"
+  dokploy_stack_deploy "$STACK_COMPOSE_ID"
 
   # The first start pulls a ~700MB image on every worker (several minutes
   # on a laptop connection), hence the long wait. Prints task states as

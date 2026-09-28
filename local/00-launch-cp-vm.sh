@@ -31,6 +31,7 @@ target_require
 launch_vm "$CP_NAME" "$CP_DISK" "$CP_MEM"
 load_cp
 install_dokploy
+check_container_dns "$CP_NODE"
 
 echo "== Dokploy is up at http://${CP_IP}:${DOKPLOY_PORT}"
 echo "== next: local/01-dokploy-api-key.sh (one-time manual admin-account step)"

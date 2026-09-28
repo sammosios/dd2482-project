@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # OpenBao helpers shared by 05-setup-openbao.sh and APP-PROJECT-SETUP.md. Talks to
-# OpenBao's HTTP API from the host through the routing mesh, with plain curl
-# and jq, so the host needs no bao CLI. Sourced after lib/common.sh; expects
-# CP_IP to be set.
+# OpenBao's HTTP API from this machine (at OPENBAO_URL, see cp_connect in
+# lib/common.sh), with plain curl and jq, so it needs no bao CLI. Sourced
+# after lib/common.sh; expects load_cp to have run.
 set -euo pipefail
 
 # The KV v2 mount Dokploy's providers read from. "secret" is Dokploy's
@@ -20,7 +20,7 @@ OPENBAO_INTERNAL_URL="http://openbao:8200"
 bao_status() {
   # HTTP status of /v1/sys/health: 200 unsealed and active, 501 not
   # initialized, 503 sealed, 000 nothing listening yet.
-  curl -s -o /dev/null -m 5 -w '%{http_code}' "http://${CP_IP}:${OPENBAO_PORT}/v1/sys/health" || true
+  curl -s -o /dev/null -m 5 -w '%{http_code}' "${OPENBAO_URL}/v1/sys/health" || true
 }
 
 bao_root_token() {
@@ -36,5 +36,5 @@ bao_api() {
   local path="$1" token; shift
   token="$(bao_root_token)"
   curl -sSf -H @<(printf 'X-Vault-Token: %s\n' "$token") \
-    "http://${CP_IP}:${OPENBAO_PORT}/v1/${path}" "$@"
+    "${OPENBAO_URL}/v1/${path}" "$@"
 }

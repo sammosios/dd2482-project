@@ -74,20 +74,20 @@ fi
 
 COMPOSE_FILE="$(render_template "$STACKS_DIR/openbao.yml" \
   OPENBAO_IMAGE_TAG OPENBAO_PORT OPENBAO_CONFIG OPENBAO_UNSEAL_SECRET)"
-dokploy_stack_sync "$CP_IP" "$PROJECT_NAME" "$COMPOSE_NAME" \
+dokploy_stack_sync "$PROJECT_NAME" "$COMPOSE_NAME" \
   "OpenBao secrets manager, pinned to the manager node" "$COMPOSE_FILE"
 
 if [[ "$STACK_CHANGED" == 0 && "$(bao_status)" != 000 ]]; then
   echo "== OpenBao already deployed and up to date, skipping deploy"
 else
   echo "== deploying OpenBao stack"
-  dokploy_stack_deploy "$CP_IP" "$STACK_COMPOSE_ID"
+  dokploy_stack_deploy "$STACK_COMPOSE_ID"
   # A redeploy replaces the task, so give the old one a moment to go away
   # before trusting a status from it.
   [[ "$STACK_CHANGED" == 1 ]] && sleep 10
 fi
 
-echo "== waiting for OpenBao on ${CP_IP}:${OPENBAO_PORT}"
+echo "== waiting for OpenBao at $OPENBAO_URL"
 for _ in $(seq 1 36); do
   [[ "$(bao_status)" != 000 ]] && break
   sleep 5
@@ -107,7 +107,7 @@ if [[ "$(bao_status)" == 501 ]]; then
   echo "== initializing OpenBao"
   # With auto-unseal there are no unseal keys to hand out, only a recovery
   # key (needed for a few operator actions, e.g. generating a new root token).
-  init="$(curl -sSf -X PUT "http://${CP_IP}:${OPENBAO_PORT}/v1/sys/init" \
+  init="$(curl -sSf -X PUT "${OPENBAO_URL}/v1/sys/init" \
     -d '{"recovery_shares": 1, "recovery_threshold": 1}')"
   ( umask 077; printf '%s\n' "$init" >"$OPENBAO_INIT_FILE" )
   echo "== root token and recovery key saved to $OPENBAO_INIT_FILE"
@@ -158,5 +158,6 @@ done
 echo "== OpenBao placement:"
 cp_exec docker service ps --filter desired-state=running \
   --format '   {{.Name}} on {{.Node}} ({{.CurrentState}})' "${STACK_NAME}_openbao"
-echo "== OpenBao up and unsealed: UI at http://${CP_IP}:${OPENBAO_PORT}/ui (root token in $OPENBAO_INIT_FILE)"
+echo "== OpenBao up and unsealed (root token in $OPENBAO_INIT_FILE)"
+echo "==   its UI: $(cp_ui_hint "$OPENBAO_PORT" /ui)"
 echo "== next: when deploying an app, follow APP-PROJECT-SETUP.md to give its project a secrets provider"

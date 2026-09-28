@@ -31,6 +31,7 @@ for i in $(seq 1 "$WORKERS"); do
   name="$(worker_name "$i")"
   launch_vm "$name"
   ensure_docker "$name"
+  check_container_dns "$name"
   join_worker "$name"
 done
 
