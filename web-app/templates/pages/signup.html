@@ -1,0 +1,34 @@
+{{template "auth" .}}
+
+{{define "content"}}
+<div class="auth-header">
+  <h1>Create an account</h1>
+  <p>You'll join as a member: you can see and edit your own profile.</p>
+</div>
+{{with .Data}}
+<form class="form" method="post" action="/signup" novalidate>
+  <div class="field">
+    <label class="label" for="name">Name</label>
+    <input class="input" id="name" name="name" value="{{.Name}}" placeholder="Ada Lovelace" autocomplete="name" required autofocus{{if .Errors.name}} aria-invalid="true"{{end}}>
+    {{with .Errors.name}}<p class="field-error">{{.}}</p>{{end}}
+  </div>
+  <div class="field">
+    <label class="label" for="email">Email</label>
+    <input class="input" id="email" name="email" type="email" value="{{.Email}}" placeholder="you@example.com" autocomplete="email" required{{if .Errors.email}} aria-invalid="true"{{end}}>
+    {{with .Errors.email}}<p class="field-error">{{.}}</p>{{end}}
+  </div>
+  <div class="field">
+    <label class="label" for="password">Password</label>
+    <input class="input" id="password" name="password" type="password" autocomplete="new-password" required{{if .Errors.password}} aria-invalid="true"{{end}}>
+    {{with .Errors.password}}<p class="field-error">{{.}}</p>{{else}}<p class="field-hint">At least 8 characters.</p>{{end}}
+  </div>
+  <div class="field">
+    <label class="label" for="confirm">Repeat password</label>
+    <input class="input" id="confirm" name="confirm" type="password" autocomplete="new-password" required{{if .Errors.confirm}} aria-invalid="true"{{end}}>
+    {{with .Errors.confirm}}<p class="field-error">{{.}}</p>{{end}}
+  </div>
+  <button class="btn btn-primary btn-block" type="submit">Create account</button>
+</form>
+{{end}}
+<p class="auth-footer">Already have an account? <a class="link" href="/login">Sign in</a></p>
+{{end}}

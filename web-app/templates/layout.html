@@ -1,0 +1,115 @@
+{{/*
+  Page shells. "app" is the signed-in layout, with a floating sidebar like
+  Dokploy's; "auth" is the centered card for sign-in, sign-up and errors.
+  Pages pick one with {{template "app" .}} and define "content".
+*/}}
+
+{{define "head"}}
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Roster</title>
+<link rel="icon" href="{{asset "favicon.svg"}}" type="image/svg+xml">
+<link rel="stylesheet" href="{{asset "app.css"}}">
+{{end}}
+
+{{define "app"}}<!doctype html>
+<html lang="en">
+<head>
+{{template "head" .}}
+{{/* htmx settings: swap 422 responses too (forms come back with their
+     errors), no eval and no injected <style> (the CSP allows neither), and
+     no copies of pages in localStorage for the back button. */}}
+<meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false,"historyCacheSize":0,"refreshOnHistoryMiss":true,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"422","swap":true},{"code":"[45]..","swap":false,"error":true}]}'>
+<script src="{{asset "htmx.min.js"}}" defer></script>
+<script src="{{asset "app.js"}}" defer></script>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-panel">
+      <div class="sidebar-header">
+        <a class="brand" href="/">
+          <span class="brand-mark">{{icon "users-round"}}</span>
+          <span class="brand-text"><strong>Roster</strong><small>Users dashboard</small></span>
+        </a>
+      </div>
+      <nav class="sidebar-content" aria-label="Main">
+        <div class="sidebar-group">
+          <p class="sidebar-label">Home</p>
+          <a class="sidebar-item" href="/"{{if eq .Nav "overview"}} aria-current="page"{{end}}>{{icon "layout-dashboard"}}<span>Overview</span></a>
+          {{if .User.IsAdmin}}
+          <a class="sidebar-item" href="/users"{{if eq .Nav "users"}} aria-current="page"{{end}}>{{icon "users"}}<span>Users</span></a>
+          {{end}}
+        </div>
+        <div class="sidebar-group">
+          <p class="sidebar-label">Settings</p>
+          <a class="sidebar-item" href="/profile"{{if eq .Nav "profile"}} aria-current="page"{{end}}>{{icon "circle-user-round"}}<span>Profile</span></a>
+        </div>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="sidebar-user" id="sidebar-user">{{template "sidebar-user" .User}}</div>
+        <form method="post" action="/logout">
+          <button class="btn btn-ghost btn-icon" type="submit" title="Sign out" aria-label="Sign out">{{icon "log-out"}}</button>
+        </form>
+      </div>
+    </div>
+  </aside>
+  <div class="sidebar-backdrop" data-sidebar-toggle></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="btn btn-ghost btn-icon" type="button" data-sidebar-toggle aria-controls="sidebar" aria-label="Toggle sidebar">{{icon "panel-left"}}</button>
+      <span class="topbar-separator"></span>
+      <nav class="breadcrumb" aria-label="Breadcrumb">
+        <a href="/">Roster</a><span aria-hidden="true">/</span><span aria-current="page">{{.Title}}</span>
+      </nav>
+      <span class="instance" title="The container (replica) that rendered this page">{{icon "server"}}{{.Host}}</span>
+    </header>
+    <main class="content">
+      {{template "content" .}}
+    </main>
+  </div>
+</div>
+
+{{/* Filled by htmx with the create/edit form; app.js opens it. */}}
+<dialog id="modal" class="dialog" aria-labelledby="modal-title"></dialog>
+
+{{/* Replaces the browser's confirm() for hx-confirm (see app.js). */}}
+<dialog id="confirm" class="dialog dialog-sm" aria-labelledby="confirm-title">
+  <form method="dialog" class="dialog-body">
+    <div class="dialog-header">
+      <h2 id="confirm-title" data-confirm-title>Are you sure?</h2>
+      <p data-confirm-text></p>
+    </div>
+    <div class="dialog-footer">
+      <button class="btn btn-outline" value="cancel">Cancel</button>
+      <button class="btn btn-destructive" value="confirm" data-confirm-action>Continue</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toaster" class="toaster" aria-live="polite"></div>
+<template id="toast-icons"><span data-kind="success">{{icon "circle-check"}}</span><span data-kind="error">{{icon "circle-alert"}}</span></template>
+</body>
+</html>
+{{end}}
+
+{{define "auth"}}<!doctype html>
+<html lang="en">
+<head>
+{{template "head" .}}
+</head>
+<body class="auth-page">
+<main class="auth">
+  <a class="brand" href="/">
+    <span class="brand-mark">{{icon "users-round"}}</span>
+    <span class="brand-text"><strong>Roster</strong><small>Users dashboard</small></span>
+  </a>
+  <div class="auth-card">
+    {{template "content" .}}
+  </div>
+  <p class="auth-meta" title="The container (replica) that rendered this page">{{icon "server"}}{{.Host}}</p>
+</main>
+</body>
+</html>
+{{end}}

@@ -1,0 +1,15 @@
+{{/* The name and email at the bottom of the sidebar (a *User). */}}
+{{define "sidebar-user"}}
+<span class="avatar">{{initials .Name}}</span>
+<span class="sidebar-user-text"><strong>{{.Name}}</strong><small>{{.Email}}</small></span>
+{{end}}
+
+{{/* A Role. */}}
+{{define "role-badge"}}
+{{if eq . "admin"}}<span class="badge badge-dark">{{icon "shield"}}Admin</span>{{else}}<span class="badge badge-gray">Member</span>{{end}}
+{{end}}
+
+{{/* A user's Active flag. */}}
+{{define "status-badge"}}
+{{if .}}<span class="badge badge-green">Active</span>{{else}}<span class="badge badge-red">Disabled</span>{{end}}
+{{end}}

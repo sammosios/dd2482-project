@@ -1,0 +1,21 @@
+{{template "auth" .}}
+
+{{define "content"}}
+<div class="auth-header">
+  <h1>Sign in</h1>
+  <p>Enter your email and password to open the dashboard.</p>
+</div>
+{{with .Data.Error}}<div class="alert alert-error" role="alert">{{icon "circle-alert"}}<span>{{.}}</span></div>{{end}}
+<form class="form" method="post" action="/login">
+  <div class="field">
+    <label class="label" for="email">Email</label>
+    <input class="input" id="email" name="email" type="email" value="{{.Data.Email}}" placeholder="you@example.com" autocomplete="username" required autofocus>
+  </div>
+  <div class="field">
+    <label class="label" for="password">Password</label>
+    <input class="input" id="password" name="password" type="password" autocomplete="current-password" required>
+  </div>
+  <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+</form>
+{{if .Signup}}<p class="auth-footer">New here? <a class="link" href="/signup">Create an account</a></p>{{end}}
+{{end}}
