@@ -29,7 +29,7 @@ REGISTRY_CREDS_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.registry-
 WEB_APP_CREDS_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.web-app-credentials"
 # forward.sh (a gitignored, WSL-only helper) forwards these local ports to
 # the control plane: Dokploy's UI, and Traefik for every app's *.localhost
-# domain. Here rather than in forward.sh so 05 can print the app's URL. Not
+# domain. Here rather than in forward.sh so 06 can print the app's URL. Not
 # 8080 for the latter: that's the web app's own port when run locally.
 FORWARD_DOKPLOY_PORT="${FORWARD_DOKPLOY_PORT:-3000}"
 FORWARD_HTTP_PORT="${FORWARD_HTTP_PORT:-8081}"

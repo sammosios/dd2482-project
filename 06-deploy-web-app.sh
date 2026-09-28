@@ -57,7 +57,7 @@ api_get() { dokploy_api "$CP_IP" "$1" -G --data-urlencode "$2"; }
 api_post() { dokploy_api "$CP_IP" "$1" -X POST -H 'Content-Type: application/json' -d "$2"; }
 
 node_exec() {
-  # node_exec <vm> <command...>: 03's cp_exec, on any node. Bare
+  # node_exec <vm> <command...>: cp_exec (lib/common.sh), on any node. Bare
   # `multipass exec` has been seen to hang (PLAN.md), so each call is capped
   # and retried; only for short commands that are safe to run twice.
   local vm="$1" attempt rc=0
@@ -96,8 +96,8 @@ registry_has_image() {
 if registry_has_image; then
   echo "== registry already has $APP_IMAGE, skipping the build"
 else
-  # On a worker when there is one: the control plane has 2 GB of RAM and
-  # runs Dokploy. Every node reaches the registry on its own
+  # On a worker when there is one: the control plane already runs Dokploy
+  # and the registry. Every node reaches the registry on its own
   # 127.0.0.1:5000, so the worker pushes directly.
   BUILD_VM="$(worker_name 1)"
   vm_exists "$BUILD_VM" || BUILD_VM="$CP_NAME"
@@ -311,10 +311,10 @@ if [[ "$(jq -r .replicas <<<"$app")" != "$REPLICAS" ]]; then
   changed=1
 fi
 
-# Replicas on the workers only: the control plane has 2 GB of RAM and
-# already runs Dokploy, the registry, and the app's database and Redis
-# (pinned there by their volumes). Without workers there's nowhere else to
-# go, so no constraint then.
+# Replicas on the workers only: the control plane already runs Dokploy,
+# the registry, and the app's database and Redis (pinned there by their
+# volumes). Without workers there's nowhere else to go, so no constraint
+# then.
 if vm_exists "$(worker_name 1)"; then
   CONSTRAINTS='["node.role==worker"]'
 else
