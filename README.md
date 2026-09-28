@@ -62,7 +62,7 @@ After `./bootstrap.sh N` finishes:
 
 Every service runs from a compose file in [`stacks/`](./stacks), deployed as a Dokploy Compose resource of type Stack (see DESIGN.md "Services as code").
 
-- The example web app, **Roster** ([`web-app/`](./web-app)), in the Dokploy project `roster`: 2 replicas of the image `127.0.0.1:5000/roster:<commit>`, plus its own PostgreSQL service. It's at `http://roster.localhost:8081` from Windows (while `forward.sh` runs), or `http://roster.<control-plane-ip>.sslip.io` wherever the VM network is reachable. The first admin's password is in `.web-app-credentials` (gitignored). To redeploy after committing a change to `web-app/`, run `./06-deploy-web-app.sh`; it builds and pushes the new image and rolls the replicas over one by one.
+- The example web app, **Roster** ([`web-app/`](./web-app)), in the Dokploy project `roster`: 2 replicas, on the workers, of the image `127.0.0.1:5000/roster:<commit>`, plus its own PostgreSQL and Redis services (Redis holds the sign-in rate limiter's counters). It's at `http://roster.localhost:8081` from Windows (while `forward.sh` runs), or `http://roster.<control-plane-ip>.sslip.io` wherever the VM network is reachable. The first admin's password is in `.web-app-credentials` (gitignored). To redeploy after committing a change to `web-app/`, run `./06-deploy-web-app.sh`; it builds and pushes the new image and rolls the replicas over one by one.
 - `05-deploy-core-services.sh` is still a stub: the rest of the core service set (secrets vault, Trivy scanning) is designed but not yet implemented; see PLAN.md's "Core services" checklist.
 
 `./teardown.sh` returns you to a clean slate — no VMs, no stale local credentials.
