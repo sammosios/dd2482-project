@@ -1,9 +1,13 @@
-.dokploy-api-key
 .dokploy-admin.env
+.github-runner.env
+remote/hosts.env
 forward.sh
+# Per-target cluster state (lib/common.sh).
+.state/
+# Its pre-.state locations, moved into .state/local/ by local/lib/target.sh.
+.dokploy-api-key
 .forward.pid
 .registry-credentials
-.github-runner.env
 .openbao-init.json
 .openbao-init.json.stale
 .web-app-credentials

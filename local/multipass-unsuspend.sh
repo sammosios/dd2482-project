@@ -7,13 +7,14 @@
 # Deletes the "suspend" snapshot from every instance image, so each VM does a
 # normal cold boot instead. VMs and their disks are kept; only the RAM state
 # of suspended VMs is lost. macOS only. For a full wipe: multipass-reset.sh.
-# Usage: ./multipass-unsuspend.sh
+# Usage: local/multipass-unsuspend.sh
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+export CLUSTER_TARGET=local
 source lib/common.sh
-source lib/multipassd.sh
+source local/lib/multipassd.sh
 
-require multipass
+target_require
 require_macos_multipassd
 
 QEMU_IMG="$MULTIPASS_BIN_DIR/qemu-img"

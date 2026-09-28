@@ -13,13 +13,13 @@
 # accepted tradeoff for not needing a browser/webdriver dependency. If it
 # breaks, falls back to printing the manual instructions.
 #
-# Usage:
-#   ./01-dokploy-api-key.sh                 # auto-provision via .dokploy-admin.env,
-#                                            # or print manual-step instructions if
-#                                            # that file doesn't exist
-#   ./01-dokploy-api-key.sh --api-key <key> # save a manually-generated key, verify it
+# Usage (through local/ or remote/, which pick the cluster):
+#   <target>/01-dokploy-api-key.sh                 # auto-provision via .dokploy-admin.env,
+#                                                   # or print manual-step instructions if
+#                                                   # that file doesn't exist
+#   <target>/01-dokploy-api-key.sh --api-key <key> # save a manually-generated key, verify it
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source lib/common.sh
 
 API_KEY=""
@@ -30,13 +30,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-require multipass curl jq
-
-vm_exists "$CP_NAME" || { echo "control plane VM not found — run 00-launch-cp-vm.sh first" >&2; exit 1; }
-CP_IP="$(vm_ip "$CP_NAME")"
+require curl jq
+target_require
+load_cp
 
 dokploy_port_open "$CP_IP" \
-  || { echo "Dokploy not responding on ${CP_IP}:${DOKPLOY_PORT} — run 00-launch-cp-vm.sh first" >&2; exit 1; }
+  || { echo "Dokploy not responding on ${CP_IP}:${DOKPLOY_PORT} — run $CLUSTER_TARGET/$TARGET_CP_SCRIPT first" >&2; exit 1; }
 
 print_manual_instructions() {
   cat <<EOF
@@ -44,7 +43,7 @@ print_manual_instructions() {
 == manual step required (one-time, first install only) ==
 1. Open http://${CP_IP}:${DOKPLOY_PORT} in a browser and create the admin account.
 2. Go to Settings -> Profile -> API/CLI and generate an API token.
-3. Re-run: ./01-dokploy-api-key.sh --api-key <token>
+3. Re-run: $CLUSTER_TARGET/01-dokploy-api-key.sh --api-key <token>
 
 (Or: cp .dokploy-admin.env.example .dokploy-admin.env, fill in real values,
 and re-run this script with no flags to provision automatically instead.)
@@ -134,7 +133,7 @@ fi
 if [[ -n "${DOKPLOY_API_KEY:-}" || -f "$API_KEY_FILE" ]]; then
   echo "== verifying API key against cluster.getNodes"
   if dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null; then
-    echo "== API key verified, ready for 02-launch-worker-vms.sh"
+    echo "== API key verified, ready for $CLUSTER_TARGET/$TARGET_WORKERS_SCRIPT"
   else
     echo "API key rejected by Dokploy — check it was generated correctly" >&2
     exit 1

@@ -10,8 +10,8 @@
 #   - always 127.0.0.1, never localhost (moby/moby#53091 on Docker < 29.8.0)
 #
 # Port 5000 is open on every node's IP, so the registry uses htpasswd auth.
-# Credentials are generated on first run into .registry-credentials
-# (gitignored, removed by teardown.sh) and reused afterwards. The htpasswd
+# Credentials are generated on first run into the target's state
+# (.state/<target>/registry-credentials) and reused afterwards. The htpasswd
 # file reaches the service as an external Swarm config, named after a hash
 # of the credentials, so changing them rolls out a new config instead of
 # colliding with the old (immutable) one.
@@ -20,28 +20,26 @@
 #
 # Safe to re-run: reuses the project/compose/registry entries if they exist,
 # and only redeploys when the compose file changed or the registry is down.
-# Usage: ./03-setup-registry.sh
+# Usage: <target>/03-setup-registry.sh
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source lib/common.sh
 source lib/dokploy.sh
 
-require multipass curl jq openssl
+require curl jq openssl
+target_require
 
 REGISTRY_ADDR="127.0.0.1:${REGISTRY_PORT}"
 PROJECT_NAME="infrastructure"
 COMPOSE_NAME="registry"
 
-vm_exists "$CP_NAME" || { echo "control plane VM not found — run 00-launch-cp-vm.sh first" >&2; exit 1; }
-CP_IP="$(vm_ip "$CP_NAME")"
-
-dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null \
-  || { echo "cannot reach Dokploy API on $CP_IP — run 01-dokploy-api-key.sh first" >&2; exit 1; }
+load_cp
+require_dokploy_api
 
 registry_status() {
   # HTTP status of the registry's API root as seen from the control plane:
   # 401 means up and enforcing auth, 000 means nothing is listening yet.
-  with_timeout 15 multipass exec "$CP_NAME" -- \
+  with_timeout 15 node_run "$CP_NODE" \
     curl -s -o /dev/null -m 5 -w '%{http_code}' "http://${REGISTRY_ADDR}/v2/" || true
 }
 
@@ -76,7 +74,7 @@ else
   # accepts bcrypt entries, so borrow httpd's copy for one run. Re-checks
   # for the config remotely, so a retry after a timeout is harmless. Longer
   # timeout, since the first run pulls httpd.
-  CP_EXEC_TIMEOUT=180 cp_exec bash -c "docker config inspect '${HTPASSWD_CONFIG}' >/dev/null 2>&1 \
+  NODE_EXEC_TIMEOUT=180 cp_exec bash -c "docker config inspect '${HTPASSWD_CONFIG}' >/dev/null 2>&1 \
     || { docker run --rm --entrypoint htpasswd httpd:2-alpine -Bbn '${REGISTRY_USER}' '${REGISTRY_PASS}' \
          | docker config create '${HTPASSWD_CONFIG}' - >/dev/null; }; rc=\$?; \
     docker image rm httpd:2-alpine >/dev/null 2>&1; exit \$rc"

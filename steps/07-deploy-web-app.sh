@@ -12,20 +12,21 @@
 # Until the CI runner exists, re-running this after committing a change to
 # web-app/ is how the app gets redeployed.
 #
-# The app's first admin gets a generated password, kept in
-# .web-app-credentials (gitignored, removed by teardown.sh); name and email
-# default to the Dokploy admin's from .dokploy-admin.env.
+# The app's first admin gets a generated password, kept in the target's
+# state (.state/<target>/web-app-credentials); name and email default to
+# the Dokploy admin's from .dokploy-admin.env.
 #
 # Safe to re-run: reuses whatever exists (including a project, database,
 # Redis and app set up by hand under the same names), skips the build when the
 # registry already has the image, and only redeploys when a setting changed
 # or the app isn't running that image.
-# Usage: ./07-deploy-web-app.sh
+# Usage: <target>/07-deploy-web-app.sh
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source lib/common.sh
 
-require multipass curl jq git openssl
+require curl jq git openssl
+target_require
 
 PROJECT_NAME="roster"
 DB_SERVICE="roster-db"
@@ -35,40 +36,24 @@ REPLICAS=2
 APP_PORT=8080
 REGISTRY_ADDR="127.0.0.1:${REGISTRY_PORT}"
 
-vm_exists "$CP_NAME" || { echo "control plane VM not found — run 00-launch-cp-vm.sh first" >&2; exit 1; }
-CP_IP="$(vm_ip "$CP_NAME")"
-
-dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null \
-  || { echo "cannot reach Dokploy API on $CP_IP — run 01-dokploy-api-key.sh first" >&2; exit 1; }
+load_cp
+require_dokploy_api
 
 [[ -f "$REGISTRY_CREDS_FILE" ]] \
-  || { echo "$REGISTRY_CREDS_FILE not found — run 03-setup-registry.sh first" >&2; exit 1; }
+  || { echo "$REGISTRY_CREDS_FILE not found — run $CLUSTER_TARGET/03-setup-registry.sh first" >&2; exit 1; }
 REGISTRY_USER="$(env_file_value "$REGISTRY_CREDS_FILE" REGISTRY_USERNAME)"
 REGISTRY_PASS="$(env_file_value "$REGISTRY_CREDS_FILE" REGISTRY_PASSWORD)"
 
 # roster.localhost is for browsers that reach Traefik through a local
-# forward (forward.sh, a gitignored WSL-only helper). The sslip.io name
-# resolves straight to the control plane, for hosts that can reach the VM
-# network: macOS, Linux, or curl inside WSL.
+# forward (local/forward.sh, a gitignored WSL-only helper). The sslip.io
+# name resolves straight to the control plane, for machines that can reach
+# it: any, for a remote cluster; macOS, Linux, or curl inside WSL for a
+# local one.
 LOCAL_HOST="roster.localhost"
 DIRECT_HOST="roster.${CP_IP}.sslip.io"
 
 api_get() { dokploy_api "$CP_IP" "$1" -G --data-urlencode "$2"; }
 api_post() { dokploy_api "$CP_IP" "$1" -X POST -H 'Content-Type: application/json' -d "$2"; }
-
-node_exec() {
-  # node_exec <vm> <command...>: cp_exec (lib/common.sh), on any node. Bare
-  # `multipass exec` has been seen to hang (PLAN.md), so each call is capped
-  # and retried; only for short commands that are safe to run twice.
-  local vm="$1" attempt rc=0
-  shift
-  for attempt in 1 2 3; do
-    with_timeout 60 multipass exec "$vm" -- sudo "$@" && return 0 || rc=$?
-    [[ "$rc" -eq 124 ]] || return "$rc"
-    echo "  (multipass exec on $vm timed out, retry $attempt/3)" >&2
-  done
-  return 124
-}
 
 # --- image ---------------------------------------------------------------------
 
@@ -99,27 +84,27 @@ else
   # On a worker when there is one: the control plane already runs Dokploy
   # and the registry. Every node reaches the registry on its own
   # 127.0.0.1:5000, so the worker pushes directly.
-  BUILD_VM="$(worker_name 1)"
-  vm_exists "$BUILD_VM" || BUILD_VM="$CP_NAME"
-  echo "== building $APP_IMAGE on $BUILD_VM"
+  BUILD_NODE="$(worker_nodes | sed -n 1p)"
+  BUILD_NODE="${BUILD_NODE:-$CP_NODE}"
+  echo "== building $APP_IMAGE on $BUILD_NODE"
 
-  # The source travels as a file: piping more than 2 MiB through
-  # `multipass exec` gets cut off (PLAN.md), and the multipass snap can only
-  # read non-hidden files under $HOME.
+  # The source travels as a file, and one under $HOME, for the local
+  # target: piping more than 2 MiB through `multipass exec` gets cut off
+  # (PLAN.md), and the multipass snap can only read non-hidden files there.
   src="$(mktemp "${HOME}/roster-src-XXXXXX")"
   trap 'rm -f "$src"' EXIT
   git archive --format=tar -o "$src" "$TAG" web-app
-  node_exec "$BUILD_VM" rm -rf /tmp/roster-build /tmp/roster-src.tar
-  multipass transfer "$src" "${BUILD_VM}:/tmp/roster-src.tar"
-  node_exec "$BUILD_VM" sh -c 'mkdir /tmp/roster-build && tar -xf /tmp/roster-src.tar -C /tmp/roster-build'
+  node_exec "$BUILD_NODE" rm -rf /tmp/roster-build /tmp/roster-src.tar
+  node_copy "$src" "$BUILD_NODE" /tmp/roster-src.tar
+  node_exec "$BUILD_NODE" sh -c 'mkdir /tmp/roster-build && tar -xf /tmp/roster-src.tar -C /tmp/roster-build'
 
   # Not capped like node_exec: on a fresh node the build first pulls the Go
   # image, which can take minutes, and its output is worth seeing live.
-  multipass exec "$BUILD_VM" -- sudo docker build -t "$APP_IMAGE" /tmp/roster-build/web-app
+  node_run "$BUILD_NODE" docker build -t "$APP_IMAGE" /tmp/roster-build/web-app
   printf '%s' "$REGISTRY_PASS" \
-    | multipass exec "$BUILD_VM" -- sudo docker login "$REGISTRY_ADDR" -u "$REGISTRY_USER" --password-stdin >/dev/null
-  multipass exec "$BUILD_VM" -- sudo docker push "$APP_IMAGE"
-  node_exec "$BUILD_VM" rm -rf /tmp/roster-build /tmp/roster-src.tar
+    | node_run "$BUILD_NODE" docker login "$REGISTRY_ADDR" -u "$REGISTRY_USER" --password-stdin >/dev/null
+  node_run "$BUILD_NODE" docker push "$APP_IMAGE"
+  node_exec "$BUILD_NODE" rm -rf /tmp/roster-build /tmp/roster-src.tar
   registry_has_image || { echo "pushed $APP_IMAGE, but the registry doesn't have it" >&2; exit 1; }
 fi
 
@@ -315,7 +300,7 @@ fi
 # the registry, and the app's database and Redis (pinned there by their
 # volumes). Without workers there's nowhere else to go, so no constraint
 # then.
-if vm_exists "$(worker_name 1)"; then
+if [[ -n "$(worker_nodes)" ]]; then
   CONSTRAINTS='["node.role==worker"]'
 else
   CONSTRAINTS='[]'
@@ -345,7 +330,7 @@ done
 service_state() {
   # "<version>|<image>|<update state>|<running>/<desired>" of the app's
   # Swarm service, or "" while it doesn't exist yet.
-  node_exec "$CP_NAME" sh -c "
+  cp_exec sh -c "
     docker service inspect '$APP_SWARM_SERVICE' 2>/dev/null \
       --format '{{.Version.Index}}|{{.Spec.TaskTemplate.ContainerSpec.Image}}|{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}|' \
       | tr -d '\n'
@@ -403,8 +388,8 @@ done
 [[ "$ok" -eq 1 ]] || { echo "the app doesn't answer through Traefik — see its Logs and Domains tabs in Dokploy" >&2; exit 1; }
 
 echo "== Roster is up: $APP_IMAGE, $REPLICAS replicas"
-if [[ -x ./forward.sh ]]; then
-  echo "==   from Windows (while ./forward.sh runs):   http://${LOCAL_HOST}:${FORWARD_HTTP_PORT}"
+if [[ "$CLUSTER_TARGET" == local && -x local/forward.sh ]]; then
+  echo "==   from Windows (while local/forward.sh runs): http://${LOCAL_HOST}:${FORWARD_HTTP_PORT}"
 fi
-echo "==   where the VM network is reachable:        http://${DIRECT_HOST}"
-echo "==   sign in as ${ADMIN_EMAIL}, password in $(basename "$WEB_APP_CREDS_FILE")"
+echo "==   wherever the control plane is reachable:    http://${DIRECT_HOST}"
+echo "==   sign in as ${ADMIN_EMAIL}, password in ${WEB_APP_CREDS_FILE#"$ROOT_DIR"/}"

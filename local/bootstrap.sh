@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Entrypoint chaining the full script chain. Worker count is mandatory -
+# Entrypoint chaining the full script chain against a local multipass
+# cluster (for a remote one: remote/bootstrap.sh). Worker count is mandatory -
 # pass it (as a bare number or --workers N) or you'll be prompted for it,
 # with a rough estimate of how many this device could handle.
 #
@@ -11,12 +12,13 @@
 # "Credential bootstrap" section.
 #
 # Usage:
-#   ./bootstrap.sh 3                                  # 3 workers
-#   ./bootstrap.sh --workers 3 [--cpus N] [--mem SIZE] [--disk SIZE]
-#                  [--cp-mem SIZE] [--cp-disk SIZE]   # --mem/--disk are per worker
-#   ./bootstrap.sh                                    # prompts for worker count
+#   local/bootstrap.sh 3                                  # 3 workers
+#   local/bootstrap.sh --workers 3 [--cpus N] [--mem SIZE] [--disk SIZE]
+#                      [--cp-mem SIZE] [--cp-disk SIZE]   # --mem/--disk are per worker
+#   local/bootstrap.sh                                    # prompts for worker count
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+export CLUSTER_TARGET=local
 source lib/common.sh
 
 WORKERS_SET=0
@@ -56,37 +58,37 @@ fi
 
 echo "== spinning up control plane + $WORKERS worker(s)"
 
-./00-launch-cp-vm.sh --cpus "$CPUS" --mem "$CP_MEM" --disk "$CP_DISK"
+local/00-launch-cp-vm.sh --cpus "$CPUS" --mem "$CP_MEM" --disk "$CP_DISK"
 
 # forward.sh is a gitignored, WSL-only local helper (see the script itself)
 # - run it if present, so Dokploy and the apps are reachable from Windows,
 # Dokploy already before 01 needs the browser. Not fatal: the cluster
 # itself is fine without it.
-if [[ -x ./forward.sh ]]; then
-  ./forward.sh || echo "== warning: ./forward.sh failed, Dokploy and the apps are not forwarded to localhost" >&2
+if [[ -x local/forward.sh ]]; then
+  local/forward.sh || echo "== warning: local/forward.sh failed, Dokploy and the apps are not forwarded to localhost" >&2
 fi
 
-if ! ./01-dokploy-api-key.sh; then
+if ! local/01-dokploy-api-key.sh; then
   echo
   echo "== stopped: credential bootstrap needs one more step (see instructions above)"
-  echo "==   once you have a token: ./01-dokploy-api-key.sh --api-key <token>, then re-run: ./bootstrap.sh $WORKERS"
+  echo "==   once you have a token: local/01-dokploy-api-key.sh --api-key <token>, then re-run: local/bootstrap.sh $WORKERS"
   echo "==   or set up .dokploy-admin.env (see .dokploy-admin.env.example) to skip this step entirely next time"
   exit 1
 fi
 
-./02-launch-worker-vms.sh --workers "$WORKERS" --cpus "$CPUS" --mem "$MEM" --disk "$DISK"
-./03-setup-registry.sh
+local/02-launch-worker-vms.sh --workers "$WORKERS" --cpus "$CPUS" --mem "$MEM" --disk "$DISK"
+local/03-setup-registry.sh
 
 # Runners need a GitHub PAT, which not everyone bringing up a cluster has -
 # skip them rather than fail the whole chain.
 if [[ -n "${GITHUB_RUNNER_PAT:-}" || -f .github-runner.env ]]; then
-  ./04-setup-ci-runner.sh
+  local/04-setup-ci-runner.sh
 else
   echo "== skipping CI runners: no GITHUB_RUNNER_PAT or .github-runner.env (see .github-runner.env.example)"
 fi
 
-./05-setup-openbao.sh
-./06-deploy-core-services.sh
-./07-deploy-web-app.sh
+local/05-setup-openbao.sh
+local/06-deploy-core-services.sh
+local/07-deploy-web-app.sh
 
 echo "== cluster up: $((WORKERS + 1)) nodes, with the Roster web app deployed"

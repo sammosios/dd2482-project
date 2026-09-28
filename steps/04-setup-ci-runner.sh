@@ -8,7 +8,7 @@
 #     swarm keeps only the newest finished container per node, since each
 #     holds everything its job wrote
 #   - Swarm global mode on node.role == worker: every worker gets a runner,
-#     including ones 02-launch-worker-vms.sh adds later
+#     including ones <target>/02 adds later
 #   - the node's Docker socket is mounted, so jobs can build and push to the
 #     cluster registry at 127.0.0.1:5000 (never localhost, see DESIGN.md)
 #
@@ -20,13 +20,14 @@
 #
 # Safe to re-run: reuses the Dokploy entries and the secret if they exist,
 # and only redeploys when the compose file changed or runners are missing.
-# Usage: ./04-setup-ci-runner.sh
+# Usage: <target>/04-setup-ci-runner.sh
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source lib/common.sh
 source lib/dokploy.sh
 
-require multipass curl jq openssl
+require curl jq openssl
+target_require
 
 PROJECT_NAME="infrastructure"
 COMPOSE_NAME="github-runner"
@@ -82,15 +83,12 @@ github_api "repos/${GITHUB_REPO}/actions/runners/registration-token" -X POST >/d
 
 # --- cluster -----------------------------------------------------------------
 
-vm_exists "$CP_NAME" || { echo "control plane VM not found — run 00-launch-cp-vm.sh first" >&2; exit 1; }
-CP_IP="$(vm_ip "$CP_NAME")"
-
-dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null \
-  || { echo "cannot reach Dokploy API on $CP_IP — run 01-dokploy-api-key.sh first" >&2; exit 1; }
+load_cp
+require_dokploy_api
 
 WORKER_COUNT="$(cp_exec docker node ls --filter role=worker --format '{{.Status}}' | grep -c '^Ready$' || true)"
 [[ "$WORKER_COUNT" -gt 0 ]] \
-  || { echo "no Ready workers in the swarm, and runners only run on workers — run 02-launch-worker-vms.sh first" >&2; exit 1; }
+  || { echo "no Ready workers in the swarm, and runners only run on workers — run $CLUSTER_TARGET/$TARGET_WORKERS_SCRIPT first" >&2; exit 1; }
 
 # Each ephemeral job leaves its stopped container behind, with everything
 # the job wrote into it (toolchains, module caches, the checkout: up to
@@ -113,14 +111,15 @@ if cp_exec docker secret inspect "$GITHUB_PAT_SECRET" >/dev/null 2>&1; then
   echo "== Swarm secret $GITHUB_PAT_SECRET already exists"
 else
   echo "== creating Swarm secret $GITHUB_PAT_SECRET"
-  # Piped over stdin, so the token isn't in any argv on the host or the VM.
-  # Not cp_exec: it can't pass stdin through. Re-checks remotely, so a
+  # Piped over stdin, so the token isn't in any argv on the host or the
+  # node. Not cp_exec: it can't pass stdin through. Re-checks remotely, so a
   # retry after a timeout is harmless.
-  GITHUB_RUNNER_PAT="$GITHUB_RUNNER_PAT" with_timeout 60 bash -c '
-    printf "%s" "$GITHUB_RUNNER_PAT" | multipass exec "$1" -- sudo bash -c \
-      "docker secret inspect $2 >/dev/null 2>&1 || docker secret create $2 - >/dev/null"
-  ' _ "$CP_NAME" "$GITHUB_PAT_SECRET" \
-    || { rc=$?; echo "creating Swarm secret $GITHUB_PAT_SECRET failed (rc=$rc, 124 = multipass exec timed out) — re-run this script" >&2; exit 1; }
+  create_pat_secret() {
+    printf '%s' "$GITHUB_RUNNER_PAT" | node_run "$CP_NODE" bash -c \
+      "docker secret inspect $GITHUB_PAT_SECRET >/dev/null 2>&1 || docker secret create $GITHUB_PAT_SECRET - >/dev/null"
+  }
+  with_timeout 60 create_pat_secret \
+    || { rc=$?; echo "creating Swarm secret $GITHUB_PAT_SECRET failed (rc=$rc, 124 = timed out) — re-run this script" >&2; exit 1; }
 fi
 
 # --- Dokploy project + compose resource --------------------------------------
@@ -157,7 +156,7 @@ else
   online="$(online_runners)"
   [[ "$online" -ge "$WORKER_COUNT" ]] || {
     echo "only $online of $WORKER_COUNT runner(s) online after 10 minutes — check the '$COMPOSE_NAME' deployment logs in Dokploy, or:" >&2
-    echo "  multipass exec $CP_NAME -- sudo docker service ps ${STACK_NAME}_runner --no-trunc" >&2
+    echo "  $(node_hint "$CP_NODE") docker service ps ${STACK_NAME}_runner --no-trunc" >&2
     exit 1
   }
 fi

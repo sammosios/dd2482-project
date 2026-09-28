@@ -7,28 +7,29 @@
 #     manager, like the registry
 #   - static-key auto-unseal: a 32-byte key generated on the control plane
 #     straight into a Swarm secret, so a restarted task unseals itself and
-#     the key never leaves the VM
+#     the key never leaves the node
 #   - joined to dokploy-network as `openbao`, because Dokploy's own server
 #     fetches secrets from it at deploy time (${{vault.<provider>.<ref>}})
 #   - also published on the routing mesh at :8200, for these scripts and
 #     the web UI
 #
-# Initialization writes the root token and recovery key to
-# .openbao-init.json (gitignored, removed by teardown.sh). Then it makes
+# Initialization writes the root token and recovery key to the target's
+# state (.state/<target>/openbao-init.json). Then it makes
 # sure there is a KV v2 mount at secret/ and the token role that
 # app project provider tokens are issued from (APP-PROJECT-SETUP.md).
 #
 # Safe to re-run: reuses the Swarm secret, config and Dokploy entries,
 # initializes only once, and only redeploys when the compose file changed or
 # OpenBao is down.
-# Usage: ./05-setup-openbao.sh
+# Usage: <target>/05-setup-openbao.sh
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source lib/common.sh
 source lib/dokploy.sh
 source lib/openbao.sh
 
-require multipass curl jq openssl base64
+require curl jq openssl base64
+target_require
 
 PROJECT_NAME="infrastructure"
 COMPOSE_NAME="openbao"
@@ -38,16 +39,13 @@ OPENBAO_IMAGE_TAG="${OPENBAO_IMAGE_TAG:-2.7.0}"
 OPENBAO_UNSEAL_KEY_ID="cluster-1"
 OPENBAO_UNSEAL_SECRET="openbao-unseal-key-${OPENBAO_UNSEAL_KEY_ID}"
 
-vm_exists "$CP_NAME" || { echo "control plane VM not found — run 00-launch-cp-vm.sh first" >&2; exit 1; }
-CP_IP="$(vm_ip "$CP_NAME")"
-
-dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null \
-  || { echo "cannot reach Dokploy API on $CP_IP — run 01-dokploy-api-key.sh first" >&2; exit 1; }
+load_cp
+require_dokploy_api
 
 # --- unseal key as a Swarm secret --------------------------------------------
 
 # Generated on the control plane itself and piped straight into the secret,
-# so it never exists on the host or in any file. Re-checks remotely, so a
+# so it never exists on this machine or in any file. Re-checks remotely, so a
 # retry after a timeout is harmless.
 if cp_exec docker secret inspect "$OPENBAO_UNSEAL_SECRET" >/dev/null 2>&1; then
   echo "== Swarm secret $OPENBAO_UNSEAL_SECRET already exists"
@@ -96,7 +94,7 @@ for _ in $(seq 1 36); do
 done
 [[ "$(bao_status)" != 000 ]] \
   || { echo "OpenBao did not come up after 3 minutes — check the '$COMPOSE_NAME' deployment logs in Dokploy, or:" >&2
-       echo "  multipass exec $CP_NAME -- sudo docker service ps ${STACK_NAME}_openbao --no-trunc" >&2; exit 1; }
+       echo "  $(node_hint "$CP_NODE") docker service ps ${STACK_NAME}_openbao --no-trunc" >&2; exit 1; }
 
 # --- initialize (once) -------------------------------------------------------
 
@@ -126,7 +124,7 @@ for _ in $(seq 1 24); do
 done
 [[ "$(bao_status)" == 200 ]] \
   || { echo "OpenBao is still sealed or not ready after 2 minutes (health: $(bao_status)) — check its logs:" >&2
-       echo "  multipass exec $CP_NAME -- sudo docker service logs ${STACK_NAME}_openbao" >&2; exit 1; }
+       echo "  $(node_hint "$CP_NODE") docker service logs ${STACK_NAME}_openbao" >&2; exit 1; }
 
 bao_api "auth/token/lookup-self" >/dev/null \
   || { echo "the root token in $OPENBAO_INIT_FILE was rejected — it belongs to a different OpenBao instance" >&2; exit 1; }

@@ -12,7 +12,7 @@ That gives two separate protections. Dokploy won't let another project use `bao-
 
 ## Prerequisites
 
-The cluster is up through `05-setup-openbao.sh`. It creates the KV mount at `secret/`, the `dokploy-provider` token role, and `.openbao-init.json` with the root token that the helpers below use.
+The cluster is up through `05-setup-openbao.sh`. It creates the KV mount at `secret/`, the `dokploy-provider` token role, and `.state/<target>/openbao-init.json` with the root token that the helpers below use.
 
 ## 0. Shell setup
 
@@ -20,13 +20,14 @@ Run everything in **bash** from the repo root, since the helpers are bash:
 
 ```bash
 bash
+CLUSTER_TARGET=local   # or remote: which cluster, as in local/ and remote/
 source lib/common.sh
 source lib/openbao.sh
+load_cp                # sets CP_IP
 
 NAME=myapp   # lowercase letters, digits and dashes, max 40 chars; not "infrastructure"
 POLICY="${OPENBAO_POLICY_PREFIX}${NAME}"
 PROVIDER="bao-${NAME}"
-CP_IP="$(vm_ip "$CP_NAME")"
 
 # Both should succeed: Dokploy API reachable, OpenBao unsealed (200)
 dokploy_api "$CP_IP" "cluster.getNodes" >/dev/null && echo dokploy ok
@@ -120,7 +121,7 @@ bao_api "auth/token/revoke" -X POST -d @<(jq -n --arg t "$TOKEN" '{token: $t}') 
 
 ## 4. Store secrets and reference them in the app
 
-Put secrets under `secret/<name>/...`, either in the OpenBao UI at `http://<CP_IP>:8200/ui` (log in with the root token from `.openbao-init.json`) or through the API:
+Put secrets under `secret/<name>/...`, either in the OpenBao UI at `http://<CP_IP>:8200/ui` (log in with the root token from `.state/<target>/openbao-init.json`) or through the API:
 
 ```bash
 bao_api "${OPENBAO_KV_MOUNT}/data/${NAME}/app" -X POST \

@@ -4,13 +4,14 @@
 # starts the daemon fresh. The last resort when multipassd won't come up and
 # multipass-unsuspend.sh didn't help. Binaries are untouched, so no reinstall
 # is needed. macOS only.
-# Usage: ./multipass-reset.sh [-y]
+# Usage: local/multipass-reset.sh [-y]
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+export CLUSTER_TARGET=local
 source lib/common.sh
-source lib/multipassd.sh
+source local/lib/multipassd.sh
 
-require multipass
+target_require
 
 ASSUME_YES=0
 [[ "${1:-}" == "-y" ]] && ASSUME_YES=1
@@ -34,12 +35,7 @@ rm -rf "$MULTIPASS_CLIENT_CERT_DIR"
 
 # Same as teardown.sh: the VMs these belonged to are gone.
 stop_forwarder
-for f in "$API_KEY_FILE" "$REGISTRY_CREDS_FILE"; do
-  if [[ -f "$f" ]]; then
-    rm -f "$f"
-    echo "== removed stale $f"
-  fi
-done
+remove_local_state
 
 start_multipassd
-echo "== reset complete - run ./bootstrap.sh to rebuild the cluster"
+echo "== reset complete - run local/bootstrap.sh to rebuild the cluster"
