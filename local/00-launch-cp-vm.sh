@@ -29,6 +29,7 @@ require curl
 target_require
 
 launch_vm "$CP_NAME" "$CP_DISK" "$CP_MEM"
+set_docker_dns "$CP_NAME"
 load_cp
 install_dokploy
 check_container_dns "$CP_NODE"

@@ -101,8 +101,22 @@ else
   # Not capped like node_exec: on a fresh node the build first pulls the Go
   # image, which can take minutes, and its output is worth seeing live.
   node_run "$BUILD_NODE" docker build -t "$APP_IMAGE" /tmp/roster-build/web-app
-  printf '%s' "$REGISTRY_PASS" \
-    | node_run "$BUILD_NODE" docker login "$REGISTRY_ADDR" -u "$REGISTRY_USER" --password-stdin >/dev/null
+  # Capped: `multipass exec` with piped stdin has been seen to hang after
+  # the login itself went through (PLAN.md), so on a timeout, check
+  # whether Docker saved the login before giving up. The password goes
+  # over stdin, so not through node_exec.
+  registry_login() {
+    printf '%s' "$REGISTRY_PASS" \
+      | node_run "$BUILD_NODE" docker login "$REGISTRY_ADDR" -u "$REGISTRY_USER" --password-stdin >/dev/null
+  }
+  rc=0
+  with_timeout 60 registry_login || rc=$?
+  if [[ "$rc" -eq 124 ]] \
+      && node_exec "$BUILD_NODE" grep -q "\"${REGISTRY_ADDR}\"" /root/.docker/config.json; then
+    echo "  (docker login on $BUILD_NODE hung after saving the login, carrying on)" >&2
+    rc=0
+  fi
+  [[ "$rc" -eq 0 ]] || { echo "docker login on $BUILD_NODE failed (rc=$rc, 124 = timed out)" >&2; exit 1; }
   node_run "$BUILD_NODE" docker push "$APP_IMAGE"
   node_exec "$BUILD_NODE" rm -rf /tmp/roster-build /tmp/roster-src.tar
   registry_has_image || { echo "pushed $APP_IMAGE, but the registry doesn't have it" >&2; exit 1; }

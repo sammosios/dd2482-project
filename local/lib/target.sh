@@ -27,6 +27,10 @@ CP_DISK="${CP_DISK:-30G}"
 # build all run on the manager, which is too much for a worker's 2G.
 CP_MEM="${CP_MEM:-4G}"
 IMAGE="${IMAGE:-24.04}"
+# DNS servers Docker gives containers on the VMs (set_docker_dns). Empty
+# keeps Docker's default: the VMs' own upstream, which is macOS's vmnet
+# forwarder on a Mac, and that has been seen to stop answering containers.
+LOCAL_DOCKER_DNS="${LOCAL_DOCKER_DNS-1.1.1.1 8.8.8.8}"
 
 # forward.sh (a gitignored, WSL-only helper in this folder) forwards these
 # local ports to the control plane: Dokploy's UI, and Traefik for every
@@ -109,6 +113,33 @@ node_wait_ready() {
   done
   echo "gave up waiting for cloud-init on $name" >&2
   return 1
+}
+
+set_docker_dns() {
+  # set_docker_dns <node> - sets LOCAL_DOCKER_DNS as the "dns" of Docker's
+  # daemon.json on the VM, keeping any other settings. Before Docker is
+  # installed, it just starts with it; if Docker is running and the setting
+  # changed, restarts it (Swarm brings the node's tasks back).
+  local node="$1" result
+  [[ -n "$LOCAL_DOCKER_DNS" ]] || return 0
+  result="$(node_exec "$node" python3 -c '
+import json, os, sys
+path, dns = "/etc/docker/daemon.json", sys.argv[1].split()
+cfg = json.load(open(path)) if os.path.exists(path) else {}
+if cfg.get("dns") == dns:
+    print("unchanged")
+else:
+    cfg["dns"] = dns
+    os.makedirs("/etc/docker", exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print("changed")' "$LOCAL_DOCKER_DNS")"
+  [[ "$result" == changed ]] || return 0
+  echo "== set Docker's DNS on $node to $LOCAL_DOCKER_DNS"
+  if node_exec "$node" systemctl is-active --quiet docker; then
+    echo "== restarting Docker on $node"
+    node_exec "$node" systemctl restart docker
+  fi
 }
 
 launch_vm() {
