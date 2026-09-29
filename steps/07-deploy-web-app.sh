@@ -7,23 +7,32 @@
 #     service (the app's sign-in rate limiter), and an application that runs
 #     that image (Docker provider) with its environment, replicas on the
 #     workers and domains; then deploys it
+#   - keeps the app's secrets (database and Redis URLs, first admin) in
+#     OpenBao, in a Dokploy secrets provider of the project's own, and gives
+#     the app references to them instead of the values (APP-PROJECT-SETUP.md,
+#     DESIGN.md "Secrets: OpenBao")
 #   - waits until every replica runs the new image and the app answers
 #     through Traefik
 # Until the CI runner exists, re-running this after committing a change to
 # web-app/ is how the app gets redeployed.
 #
 # The app's first admin gets a generated password, kept in the target's
-# state (.state/<target>/web-app-credentials); name and email default to
-# the Dokploy admin's from .dokploy-admin.env.
+# state (.state/<target>/web-app-credentials) and in OpenBao; name and email
+# default to the Dokploy admin's from .dokploy-admin.env. Without the state
+# file, the admin comes back from OpenBao.
 #
 # Safe to re-run: reuses whatever exists (including a project, database,
 # Redis and app set up by hand under the same names), skips the build when the
-# registry already has the image, and only redeploys when a setting changed
-# or the app isn't running that image.
+# registry already has the image, and only redeploys when a setting or a
+# secret changed or the app isn't running that image. The database and Redis
+# passwords are Dokploy's, so OpenBao only holds copies, which every run
+# brings up to date. That includes putting back a value edited in OpenBao by
+# hand (and redeploying): a hand edit lasts until the next run of this script.
 # Usage: <target>/07-deploy-web-app.sh
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source lib/common.sh
+source lib/openbao.sh
 
 require curl jq git openssl
 target_require
@@ -38,6 +47,10 @@ REGISTRY_ADDR="127.0.0.1:${REGISTRY_PORT}"
 
 load_cp
 require_dokploy_api
+
+# The app's secrets provider and secret both live in OpenBao.
+[[ "$(bao_status)" == 200 ]] \
+  || { echo "OpenBao isn't up and unsealed at $OPENBAO_URL (health $(bao_status)) — run $CLUSTER_TARGET/05-setup-openbao.sh first" >&2; exit 1; }
 
 [[ -f "$REGISTRY_CREDS_FILE" ]] \
   || { echo "$REGISTRY_CREDS_FILE not found — run $CLUSTER_TARGET/03-setup-registry.sh first" >&2; exit 1; }
@@ -221,6 +234,82 @@ if [[ "$(jq -r .applicationStatus <<<"$redis")" != "done" ]]; then
 fi
 REDIS_URL="$(jq -r '"redis://default:\(.databasePassword)@\(.appName):6379"' <<<"$redis")"
 
+# --- secrets provider --------------------------------------------------------------
+
+# APP-PROJECT-SETUP.md steps 2 and 3, for this project: an OpenBao policy that
+# reads only secret/roster/*, and a Dokploy secrets provider holding a token
+# issued with just that policy, assigned to this project only.
+POLICY="${OPENBAO_POLICY_PREFIX}${PROJECT_NAME}"
+PROVIDER="bao-${PROJECT_NAME}"
+SECRET_PATH="${PROJECT_NAME}/app"
+PROJECT_ID="$(jq -r --arg e "$ENV_ID" \
+  'first(.[] | select(any(.environments[]; .environmentId == $e)) | .projectId) // empty' <<<"$projects")"
+[[ -n "$PROJECT_ID" ]] || { echo "couldn't find the id of the '$PROJECT_NAME' project" >&2; exit 1; }
+
+policy_hcl="$(cat <<EOF
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+path "${OPENBAO_KV_MOUNT}/data/${PROJECT_NAME}/*" {
+  capabilities = ["read"]
+}
+path "${OPENBAO_KV_MOUNT}/metadata/${PROJECT_NAME}/*" {
+  capabilities = ["read", "list"]
+}
+path "${OPENBAO_KV_MOUNT}/metadata/" {
+  capabilities = ["list"]
+}
+EOF
+)"
+if [[ "$(bao_api "sys/policies/acl/${POLICY}" 2>/dev/null | jq -r '.data.policy // empty' || true)" == "$policy_hcl" ]]; then
+  echo "== OpenBao policy '$POLICY' already applied"
+else
+  echo "== applying OpenBao policy '$POLICY'"
+  bao_api "sys/policies/acl/${POLICY}" -X PUT \
+    -d "$(jq -n --arg p "$policy_hcl" '{policy: $p}')" >/dev/null
+fi
+
+create_vault_provider() {
+  # Called on its own, not in a condition, so `set -e` still applies in here.
+  local token config
+  token="$(bao_api "auth/token/create/${OPENBAO_PROVIDER_ROLE}" -X POST \
+    -d "$(jq -n --arg p "$POLICY" --arg n "$PROJECT_NAME" \
+      '{policies: [$p], display_name: ("dokploy-" + $n), meta: {project: $n}}')" \
+    | jq -er '.auth.client_token')"
+  config="$(jq -n --arg u "$OPENBAO_INTERNAL_URL" --arg t "$token" --arg m "$OPENBAO_KV_MOUNT" \
+    '{providerType: "hashicorp", url: $u, token: $t, mount: $m}')"
+  # The test runs from Dokploy's server, so it also proves Dokploy reaches
+  # OpenBao over dokploy-network.
+  if api_post vaultProvider.testConnection "$(jq -n --argjson c "$config" '{config: $c}')" \
+        | jq -e '. == true' >/dev/null \
+      && api_post vaultProvider.create "$(jq -n --arg n "$PROVIDER" --argjson c "$config" --arg p "$PROJECT_ID" \
+        '{name: $n, config: $c, assignments: [{projectId: $p}]}')" >/dev/null; then
+    return 0
+  fi
+  # Dokploy shows the token masked, so a token that didn't make it into a
+  # provider is only a live credential nobody holds: revoke it.
+  bao_api "auth/token/revoke" -X POST -d @<(jq -n --arg t "$token" '{token: $t}') >/dev/null || true
+  echo "creating the secrets provider '$PROVIDER' failed (revoked its token) — see Dokploy's logs on the control plane" >&2
+  return 1
+}
+
+provider_id="$(dokploy_api "vaultProvider.all" \
+  | jq -r --arg n "$PROVIDER" 'first(.[] | select(.name == $n) | .vaultProviderId) // empty')"
+if [[ -n "$provider_id" ]]; then
+  # Its token is masked in Dokploy, so there's nothing to compare against.
+  # It expires 32 days after it was issued (DESIGN.md "Secrets: OpenBao").
+  echo "== secrets provider '$PROVIDER' already exists"
+else
+  echo "== creating secrets provider '$PROVIDER'"
+  create_vault_provider
+fi
+
+app_secrets() {
+  # The fields of secret/roster/app as JSON: {} while it doesn't exist (or
+  # can't be read, which the write further down would then fail on).
+  bao_api "${OPENBAO_KV_MOUNT}/data/${SECRET_PATH}" 2>/dev/null | jq -c '.data.data // {}' || echo '{}'
+}
+
 # --- application -------------------------------------------------------------------
 
 APP_ID="$(jq -r --arg n "$APP_SERVICE" \
@@ -242,7 +331,13 @@ APP_SWARM_SERVICE="$(jq -r .appName <<<"$app")"
 
 # The app only reads ADMIN_* on its first start against an empty database, to
 # create the first admin; after that they change nothing.
-current_env() { env_file_value <(jq -r '.env // ""' <<<"$app") "$1" || true; }
+current_env() {
+  # current_env <key>: the value the app's env sets it to, or nothing. A
+  # ${{vault...}} reference isn't a value: that's OpenBao's to resolve.
+  local value
+  value="$(env_file_value <(jq -r '.env // ""' <<<"$app") "$1" || true)"
+  [[ "$value" == '${{'* ]] || echo "$value"
+}
 
 if [[ -f "$WEB_APP_CREDS_FILE" ]]; then
   ADMIN_EMAIL="$(env_file_value "$WEB_APP_CREDS_FILE" ADMIN_EMAIL || true)"
@@ -252,7 +347,16 @@ if [[ -f "$WEB_APP_CREDS_FILE" ]]; then
     || { echo "$WEB_APP_CREDS_FILE is missing ADMIN_EMAIL or ADMIN_PASSWORD — delete it to regenerate" >&2; exit 1; }
   echo "== reusing the app's admin credentials from $WEB_APP_CREDS_FILE"
 else
-  if [[ -n "$(current_env ADMIN_PASSWORD)" ]]; then
+  stored="$(app_secrets)"
+  if [[ -n "$(jq -r '.ADMIN_PASSWORD // empty' <<<"$stored")" ]]; then
+    # Deployed before, but the state file is gone (deleted, or this is
+    # another checkout of a shared cluster): OpenBao has the admin the
+    # database knows, so use it rather than inventing a new one.
+    ADMIN_EMAIL="$(jq -r '.ADMIN_EMAIL // empty' <<<"$stored")"
+    ADMIN_NAME="$(jq -r '.ADMIN_NAME // empty' <<<"$stored")"
+    ADMIN_PASSWORD="$(jq -r '.ADMIN_PASSWORD' <<<"$stored")"
+    how="restored the app's admin credentials from OpenBao"
+  elif [[ -n "$(current_env ADMIN_PASSWORD)" ]]; then
     # Set up by hand before: keep that admin rather than inventing a
     # password its database has never seen.
     ADMIN_EMAIL="$(current_env ADMIN_EMAIL)"
@@ -293,8 +397,26 @@ if ! jq -e --arg i "$APP_IMAGE" --arg r "$REGISTRY_ADDR" --arg u "$REGISTRY_USER
   changed=1
 fi
 
-ENV_VARS="$(printf 'DATABASE_URL=%s\nREDIS_URL=%s\nADMIN_EMAIL=%s\nADMIN_NAME="%s"\nADMIN_PASSWORD=%s' \
-  "$DATABASE_URL" "$REDIS_URL" "$ADMIN_EMAIL" "$ADMIN_NAME" "$ADMIN_PASSWORD")"
+# The app's secrets, in OpenBao. The database and Redis URLs hold passwords
+# that Dokploy generated and owns, so this is a copy, refreshed here on every
+# run. Written only when something differs, so re-runs don't pile up versions.
+SECRETS="$(jq -n --arg d "$DATABASE_URL" --arg r "$REDIS_URL" --arg e "$ADMIN_EMAIL" \
+  --arg n "$ADMIN_NAME" --arg p "$ADMIN_PASSWORD" \
+  '{DATABASE_URL: $d, REDIS_URL: $r, ADMIN_EMAIL: $e, ADMIN_NAME: $n, ADMIN_PASSWORD: $p}')"
+if ! jq -en --argjson a "$(app_secrets)" --argjson b "$SECRETS" '$a == $b' >/dev/null; then
+  echo "== writing the app's secrets to OpenBao (${OPENBAO_KV_MOUNT}/${SECRET_PATH})"
+  bao_api "${OPENBAO_KV_MOUNT}/data/${SECRET_PATH}" -X POST \
+    -d "$(jq -n --argjson d "$SECRETS" '{data: $d}')" >/dev/null
+  # Dokploy only reads them when it deploys, and the env below stays the same
+  # when only a value changed.
+  changed=1
+fi
+
+# The env the app gets: one reference per secret, which Dokploy resolves
+# through the project's provider each time it deploys. Its own database only
+# ever stores these lines.
+ENV_VARS="$(jq -r --arg p "$PROVIDER" --arg s "$SECRET_PATH" \
+  'keys_unsorted[] | "\(.)=${{vault.\($p).\($s):\(.)}}"' <<<"$SECRETS")"
 if [[ "$(jq -r '.env // ""' <<<"$app")" != "$ENV_VARS" ]]; then
   echo "== saving '$APP_SERVICE' environment variables"
   # createEnvFile only matters when Dokploy builds the image; this one's prebuilt.
