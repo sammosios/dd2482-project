@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+# A fine-grained token for github_repo: Administration read/write, Metadata
+# read-only, nothing else (see variables.tf).
+github_runner_pat = "github_pat_..."
+# github_runner_pat_version = 2  # bump after changing the token

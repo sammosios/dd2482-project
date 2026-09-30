@@ -1,0 +1,84 @@
+#!/bin/bash
+# GCE startup script (google-startup-scripts.service), run as root on every
+# boot, so every step checks before it acts. Rendered by Terraform: this
+# part is shared, the role's own steps follow (node/cp.sh.tftpl,
+# node/worker.sh.tftpl). Its output: journalctl -u google-startup-scripts
+set -euo pipefail
+
+log() { echo "[node-setup] $*"; }
+
+# The port guard goes first, so Docker's published ports are closed from the
+# moment Docker starts.
+install_port_guard() {
+  log "installing the port guard"
+  mkdir -p /etc/dokploy-port-guard
+  cat >/usr/local/sbin/dokploy-port-guard <<'GUARD'
+${port_guard}
+GUARD
+  chmod 755 /usr/local/sbin/dokploy-port-guard
+  cat >/etc/systemd/system/dokploy-port-guard.service <<'UNIT'
+${port_guard_unit}
+UNIT
+  echo "${peers}" >/etc/dokploy-port-guard/peers
+  systemctl daemon-reload
+  systemctl enable --quiet dokploy-port-guard.service
+  systemctl restart dokploy-port-guard.service
+}
+
+# A fresh Ubuntu server starts its daily apt run within minutes of booting,
+# and an installer that meets its lock fails outright: pause the timers,
+# wait for a run in progress, and let apt wait on the lock for anything that
+# still slips in.
+apt_quiet() {
+  systemctl stop apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true
+  for _ in $(seq 1 120); do
+    systemctl is-active --quiet apt-daily.service apt-daily-upgrade.service || break
+    log "waiting for the system's own apt run to finish"
+    sleep 5
+  done
+  echo 'DPkg::Lock::Timeout "600";' >/etc/apt/apt.conf.d/90-wait-for-lock
+  export DEBIAN_FRONTEND=noninteractive
+}
+
+# The same Docker version on every node: a version skew once made the same
+# command hang on one node and work on another (DESIGN.md). Dokploy's
+# installer keeps a Docker that's already there.
+install_docker() {
+  if command -v docker >/dev/null; then
+    return
+  fi
+  log "installing Docker ${docker_version}"
+  apt_quiet
+  curl -fsSL https://get.docker.com | sh -s -- --version "${docker_version}"
+  apt-mark hold docker-ce docker-ce-cli docker-ce-rootless-extras
+  systemctl start apt-daily.timer apt-daily-upgrade.timer
+}
+
+# Secret Manager, with the VM's own service account, which may only touch
+# the secrets its role needs (terraform/gcp/main.tf). The swarm's worker
+# join token goes from the control plane to the workers this way.
+gcp_token() {
+  curl -fsS -H 'Metadata-Flavor: Google' \
+    http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin)["access_token"])'
+}
+
+read_secret() {
+  curl -fsS -H "Authorization: Bearer $(gcp_token)" \
+    "https://secretmanager.googleapis.com/v1/$1/versions/latest:access" \
+    | python3 -c 'import base64, json, sys; print(base64.b64decode(json.load(sys.stdin)["payload"]["data"]).decode())'
+}
+
+write_secret() {
+  local data
+  data="$(printf '%s' "$2" | base64 -w0)"
+  curl -fsS -o /dev/null -X POST -H "Authorization: Bearer $(gcp_token)" \
+    -H 'Content-Type: application/json' -d "{\"payload\": {\"data\": \"$data\"}}" \
+    "https://secretmanager.googleapis.com/v1/$1:addVersion"
+}
+
+read_join_token() { read_secret "${join_token_secret}"; }
+write_join_token() { write_secret "${join_token_secret}" "$1"; }
+
+install_port_guard
+install_docker

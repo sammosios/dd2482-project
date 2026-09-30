@@ -75,3 +75,59 @@ variable "ssh_source_ranges" {
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
+
+variable "domain" {
+  description = "Cloudflare zone the cluster's hostnames go in."
+  type        = string
+  default     = "sammosios.com"
+}
+
+variable "cloudflare_zone_id" {
+  description = "Id of var.domain's zone, from its Overview page in the Cloudflare dashboard."
+  type        = string
+}
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token with Zone > DNS > Edit on var.cloudflare_zone_id."
+  type        = string
+  sensitive   = true
+}
+
+# DNS only, not proxied through Cloudflare: Traefik on the control plane
+# answers Let's Encrypt's HTTP challenge and terminates TLS itself.
+variable "hostnames" {
+  description = "Names under var.domain pointed at the control plane: Dokploy's UI, OpenBao's UI and the apps."
+  type        = list(string)
+  default     = ["dokploy", "bao", "roster"]
+}
+
+# The version terraform-provider-dokploy targets (see its README); move them
+# together.
+variable "dokploy_version" {
+  description = "Dokploy release the control plane installs."
+  type        = string
+  default     = "v0.30.7"
+}
+
+# What Dokploy's installer would install itself; every node gets this one.
+variable "docker_version" {
+  description = "Docker Engine version on every node."
+  type        = string
+  default     = "28.5.0"
+}
+
+variable "dokploy_admin_name" {
+  description = "Name of Dokploy's first admin. Its password is generated: terraform output -raw dokploy_admin_password."
+  type        = string
+}
+
+variable "dokploy_admin_email" {
+  description = "Email (the login) of Dokploy's first admin."
+  type        = string
+}
+
+variable "acme_email" {
+  description = "Email Let's Encrypt sends certificate expiry notices to."
+  type        = string
+  default     = "sam.mosios+letsencrypt@gmail.com"
+}

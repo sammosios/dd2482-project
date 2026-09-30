@@ -9,7 +9,20 @@ This is a working plan for standing up the cluster, not the implementation itsel
 
 ## Goal
 
-A reproducible-from-clean-state cluster: Multipass VMs → Docker Swarm → Dokploy on top, driven by a chain of scripts, with the node count parameterized (1 control plane + N workers). The same chain also sets up servers that are already provisioned, over ssh (see Script chain). There's a `bootstrap.sh` entrypoint per target, but it's honest about not always being one command — see the note on the credential-bootstrap step below.
+A reproducible-from-clean-state cluster on GCP: one command (`./up.sh`) brings up the VMs, Docker Swarm, Dokploy, the registry, OpenBao, CI runners and the example web app, each on its own HTTPS domain under `sammosios.com`, and one (`./down.sh`) tears it down. Everything is Terraform, in stages; see DESIGN.md "Provisioning".
+
+## Move to GCP and Terraform (2026-09-30)
+
+The cluster moved off Multipass onto GCP, and the bash chain (`local/`, `remote/`, `steps/`, `lib/`, `stacks/`) was replaced by Terraform. The sections below from "Architecture" to "Host OS notes" describe that chain and are kept as the build log; the chain itself is in git history (last in `05b275f`).
+
+- [x] `terraform/gcp`: VMs (1 × e2-medium control plane, 2 × e2-small workers, `europe-north1-a`), a VPC with MTU 1500, firewall, static IPs, Cloudflare DNS. First applied 2026-09-30, then run once end to end with the old `remote/bootstrap.sh`: web app up on its sslip.io domain, 3000/5000/8200/2377 closed from outside.
+- [x] Startup scripts install the port guard, Docker 28.5.0 and Dokploy v0.30.7, and join the workers through a Secret Manager secret. Verified on a fresh apply: control plane ready in under 5 minutes, both workers in the swarm.
+- [x] Found on that apply: a worker got the control plane's requested private IP (`10.10.0.2`), because the address was only requested, not reserved, and the VMs were created at the same moment. Fixed by reserving it (`google_compute_address`, now `10.10.0.10`). The workers had already started with the old address baked in; re-running their startup script (`sudo google_metadata_script_runner startup`) joined them.
+- [x] Dokploy's domain, set by hand once (`settings.assignDomainServer`) after creating the admin with the old `01`: `https://dokploy.sammosios.com` with a Let's Encrypt certificate.
+- [x] Written, not yet run: the control plane creates Dokploy's admin, API key and domain itself (`node/dokploy-bootstrap.py`); the state bucket (`terraform/bootstrap`) and GCS backends; `terraform/platform` (registry, self-initializing OpenBao, `bao.` domain); `terraform/services` (KV mount, token role, runners with their GitHub token from OpenBao); `terraform/apps/roster`; CI's push and deploy steps; `up.sh`/`down.sh`. The `gcp` stage's state is already in the bucket.
+- [x] First `./up.sh` run (2026-09-30): through `gcp` and into `platform`, which failed at `dokploy_registry`: `registry.create` runs `docker login` at once, and the registry container wasn't up yet (a stack deploy is "done" once Swarm accepts it). The registry itself came up fine. Fixed with a 60 s `time_sleep` between the stack and the registry entry.
+- [ ] Run `./down.sh` then `./up.sh` from nothing, and fix what it finds. Things most likely to need a look: OpenBao's self-initialization config in JSON form, Dokploy resolving a `${{vault...}}` reference in a stack's env for the runners, and the first CI deploy.
+- [ ] Time a full `up.sh` for the writeup.
 
 ## Architecture
 

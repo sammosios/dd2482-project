@@ -1,0 +1,78 @@
+#!/bin/sh
+# Installed on every node by its startup script (node/common.sh), and
+# re-applied by dokploy-port-guard.service at boot and whenever Docker
+# restarts. Keeps the cluster's internal ports off the network, whatever the
+# provider's firewall allows - Docker opens the ports it publishes itself,
+# past ufw:
+#   - Dokploy (3000), the registry (5000) and OpenBao (8200): only from
+#     the node itself. From outside, Dokploy and OpenBao are reached through
+#     Traefik on 443.
+#   - Docker Swarm (2377/tcp, 7946/tcp+udp, 4789/udp): only from the
+#     cluster's nodes, the addresses or CIDRs in
+#     /etc/dokploy-port-guard/peers.
+# GCP's firewall already does all of this; the guard is the second layer,
+# in case a firewall rule is ever loosened.
+# Nothing else is touched: ssh, 80 and 443 stay as they were.
+set -eu
+
+PEERS_FILE=/etc/dokploy-port-guard/peers
+PRIVATE_PORTS="3000 5000 8200"
+BRIDGES="lo docker0 docker_gwbridge br+"
+
+new_chain() {
+  # new_chain <iptables|ip6tables> <table> <chain> - creates it, or empties it
+  "$1" -w -t "$2" -N "$3" 2>/dev/null || "$1" -w -t "$2" -F "$3"
+}
+
+jump_first() {
+  # jump_first <iptables|ip6tables> <from> <to> - makes <to> the first rule of <from>
+  "$1" -w -C "$2" -j "$3" 2>/dev/null || "$1" -w -I "$2" -j "$3"
+}
+
+# Published ports. Docker rewrites their destination to a container before
+# filtering, so they never reach INPUT: FORWARD sends them through
+# DOCKER-USER first, where conntrack still knows the port that was asked
+# for. Only new connections, so replies to containers' own outgoing
+# connections to such ports elsewhere still get through.
+new_chain iptables filter DOKPLOY-GUARD-FWD
+for i in $BRIDGES; do
+  iptables -w -A DOKPLOY-GUARD-FWD -i "$i" -j RETURN
+done
+for p in $PRIVATE_PORTS; do
+  iptables -w -A DOKPLOY-GUARD-FWD -p tcp -m conntrack --ctstate NEW --ctorigdstport "$p" -j DROP
+done
+# Created here if Docker isn't running yet; it keeps what it finds.
+iptables -w -N DOCKER-USER 2>/dev/null || true
+jump_first iptables DOCKER-USER DOKPLOY-GUARD-FWD
+
+# Ports the node itself listens on: Swarm's, and Docker's userland proxy
+# for published ports over IPv6.
+new_chain iptables filter DOKPLOY-GUARD-IN
+for i in $BRIDGES; do
+  iptables -w -A DOKPLOY-GUARD-IN -i "$i" -j RETURN
+done
+if [ -f "$PEERS_FILE" ]; then
+  for peer in $(grep -E '^[0-9./]+$' "$PEERS_FILE"); do
+    iptables -w -A DOKPLOY-GUARD-IN -s "$peer" -j RETURN
+  done
+fi
+for p in $PRIVATE_PORTS 2377 7946; do
+  iptables -w -A DOKPLOY-GUARD-IN -p tcp --dport "$p" -j DROP
+done
+for p in 7946 4789; do
+  iptables -w -A DOKPLOY-GUARD-IN -p udp --dport "$p" -j DROP
+done
+jump_first iptables INPUT DOKPLOY-GUARD-IN
+
+# Swarm here runs over IPv4 only, so over IPv6 all of them are closed.
+if command -v ip6tables >/dev/null 2>&1 && ip6tables -w -L INPUT >/dev/null 2>&1; then
+  new_chain ip6tables filter DOKPLOY-GUARD-IN
+  ip6tables -w -A DOKPLOY-GUARD-IN -i lo -j RETURN
+  for p in $PRIVATE_PORTS 2377 7946; do
+    ip6tables -w -A DOKPLOY-GUARD-IN -p tcp --dport "$p" -j DROP
+  done
+  for p in 7946 4789; do
+    ip6tables -w -A DOKPLOY-GUARD-IN -p udp --dport "$p" -j DROP
+  done
+  jump_first ip6tables INPUT DOKPLOY-GUARD-IN
+fi

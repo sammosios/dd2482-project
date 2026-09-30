@@ -1,96 +1,51 @@
 # Self-Hosted PaaS Cluster with Dokploy
 
-Reproducible Docker Swarm → [Dokploy](https://dokploy.com/) cluster, driven by a chain of bash scripts, on either of two **targets**:
-
-- [`local/`](./local): Multipass VMs on your machine, for spinning up and testing from nothing.
-- [`remote/`](./remote): servers that are already provisioned (any cloud or bare metal), set up over ssh.
-
-Both run the same steps once the nodes exist (in [`steps/`](./steps), each wrapped by a script of the same name in both folders), and keep their generated credentials apart, in `.state/local/` and `.state/remote/`. DD2482 project (Samouil Mosios, Pavlos Spanoudakis) — see [`PLAN.md`](./PLAN.md) for the full design, decisions, and bugs found along the way. This README covers just what's needed to run it; it'll grow as the project does.
+A [Dokploy](https://dokploy.com/) cluster on Docker Swarm, on GCP, entirely from Terraform: one command brings up the VMs, the swarm, Dokploy, a container registry, OpenBao for secrets, self-hosted CI runners and an example app, each on its own HTTPS domain. DD2482 project (Samouil Mosios, Pavlos Spanoudakis). What runs where: [`ARCHITECTURE.md`](./ARCHITECTURE.md); why it's built this way: [`DESIGN.md`](./DESIGN.md); the build log: [`PLAN.md`](./PLAN.md).
 
 ## Requirements
 
-- `curl`, `jq`, `git`, `openssl`
-- **bash 4+** — macOS ships bash 3.2 by default, which is too old (`local/teardown.sh` uses `mapfile`, a bash 4+ builtin). Install a newer one (e.g. `brew install bash`) and make sure it's first in `PATH`; check with `bash --version`.
+- `terraform` ≥ 1.11, `gcloud`, `gh`, `curl`, `jq`, `git`
+- A GCP project (`devops-project-510215`) with billing on, and you as its owner:
+  `gcloud auth application-default login`
+- `gh auth login`, with the `repo` and `workflow` scopes (the default)
+- A Cloudflare API token with DNS Edit on the `sammosios.com` zone
+- A fine-grained GitHub token for the CI runners: this repo only, Administration read/write, Metadata read-only
 
-For `local/`:
-
-- [Multipass](https://multipass.run/) — provisions the VMs
-- ~2 CPU cores per VM, 4GB RAM for the control plane (`--cp-mem`) and 2GB per worker (`--mem`). Disks are 15G per worker (`--disk`), which run the CI jobs, and 30G for the control plane (`--cp-disk`), which holds the image builds and the registry. Multipass disks are sparse, so they only use host space as they fill. — `local/bootstrap.sh` estimates how many workers your machine can handle if you don't pass a count.
-- If running from Windows: see PLAN.md's "Host OS notes" before using WSL2 — there's a real networking gap to know about first.
-
-For `remote/`:
-
-- `ssh`
-- One fresh Ubuntu 24.04 server for the control plane (2 vCPUs, 4GB RAM, 30G disk, as above) and any number of workers (2 vCPUs, 2GB, 15G), with ssh access as a user with passwordless sudo (a cloud image's `ubuntu` user, or `root`). The provider's firewall needs only ssh from your machine, 80/443 to the control plane, and Swarm's ports between the nodes: the chain closes everything else it runs itself, on each node, and reaches Dokploy, the registry and OpenBao through ssh. Details in [`remote/hosts.env.example`](./remote/hosts.env.example). Then:
-
-  ```
-  cp remote/hosts.env.example remote/hosts.env   # fill in CP_HOST, WORKER_HOSTS, SSH_USER
-  ```
-
-## One-time setup: admin credentials
+## One-time setup
 
 ```
-cp .dokploy-admin.env.example .dokploy-admin.env
+cp terraform/gcp/terraform.tfvars.example terraform/gcp/terraform.tfvars
+cp terraform/services/terraform.tfvars.example terraform/services/terraform.tfvars
 ```
 
-Fill in `DOKPLOY_ADMIN_NAME` / `DOKPLOY_ADMIN_EMAIL` / `DOKPLOY_ADMIN_PASSWORD` with real values (any strong password works, including ones with special characters). This file is gitignored and never committed. With it present, the whole cluster — including Dokploy's first admin account and API key — comes up with zero manual steps. Without it, you'll be prompted to create the admin account through the browser once and paste back a token; either way works.
+Fill them in: your ssh public key, the Cloudflare zone id and token, Dokploy's admin name and email, and the runners' GitHub token. Both files are gitignored. Everything else (every password, key and token the cluster uses) is generated.
 
-## Optional: CI runners
-
-```
-cp .github-runner.env.example .github-runner.env
-```
-
-Put a GitHub PAT that can manage this repo's self-hosted runners in `GITHUB_RUNNER_PAT` (fine-grained: "Administration: Read and write" on the repo; classic: `repo` scope), or export `GITHUB_RUNNER_PAT` instead. The file is gitignored. Without either, `bootstrap.sh` skips the runners. Both targets use the same file, but runners from both clusters at once would share the repo's CI jobs.
-
-## Key commands
-
-Local:
+## Commands
 
 ```
-local/bootstrap.sh 3         # bring up control plane + 3 workers (mandatory worker count,
-                             # prompted with a device-capacity estimate if omitted)
-local/teardown.sh            # tear everything down (prompts for confirmation; -y to skip)
-local/07-deploy-web-app.sh   # redeploy the web app after committing a change to web-app/
+./up.sh      # bring the cluster up, or bring it in line with the code
+./down.sh    # tear it down (the state bucket stays)
 ```
 
-Remote:
+`up.sh` applies five Terraform stages in order and waits between them for what the next one needs; see the top of the script, or DESIGN.md "Provisioning". It's safe to re-run: a stage with nothing to change does nothing. A fresh cluster takes about 20 minutes, most of it the control plane installing Dokploy and CI building the first image.
 
-```
-remote/bootstrap.sh          # set up the servers in remote/hosts.env: Dokploy, workers, services
-remote/07-deploy-web-app.sh  # redeploy the web app
-remote/forget.sh             # after destroying/rebuilding the servers: drop the local state for them
-```
+To change one stage, apply it on its own: `terraform -chdir=terraform/<stage> apply`. The stages are `bootstrap`, `gcp`, `platform`, `services` and `apps/roster`.
 
-All of these are safe to re-run. `bootstrap.sh` is idempotent — re-running it skips anything already up and only adds what's missing: a higher `local` worker count, or new hosts in `WORKER_HOSTS`. **Known limitation**: neither scales down — extra workers are left in the swarm (see PLAN.md).
+## What you get
 
-Each phase is also its own standalone script if you need finer control: `00` → `01-dokploy-api-key.sh` → `02` → `03-setup-registry.sh` → `04-setup-ci-runner.sh` → `05-setup-openbao.sh` → `06-deploy-core-services.sh` → `07-deploy-web-app.sh`, where `00`/`02` are `00-launch-cp-vm.sh`/`02-launch-worker-vms.sh` in `local/`, and `00-install-dokploy.sh`/`02-join-workers.sh` in `remote/`. `bootstrap.sh` just chains these.
+| | |
+|---|---|
+| Dokploy | `https://dokploy.sammosios.com`. Admin: the email in `terraform/gcp/terraform.tfvars`, password from `terraform -chdir=terraform/gcp output -raw dokploy_admin_password` |
+| OpenBao | `https://bao.sammosios.com/ui`. User `terraform`, password in the `dokploy-openbao-password` secret in Secret Manager |
+| Roster | `https://roster.sammosios.com`, the example app ([`web-app/`](./web-app)), 2 replicas, with its own PostgreSQL and Redis. First admin: `terraform -chdir=terraform/apps/roster output -raw admin_password` |
+| Registry | `127.0.0.1:5000` on every node, registered in Dokploy as `cluster-registry` |
+| CI | one self-hosted runner per worker: `runs-on: [self-hosted, dokploy]` |
+| Nodes | `dokploy-cp` (e2-medium) and `dokploy-worker-1..2` (e2-small) in `europe-north1-a`; ssh as `ubuntu` with your key |
 
-Apart from the example web app, which `bootstrap.sh` deploys with `07`, deploying an app isn't part of bootstrap: when you have one, follow [APP-PROJECT-SETUP.md](APP-PROJECT-SETUP.md) to give its Dokploy project its own OpenBao secrets provider.
+**Deploying the app** is CI's job: push a change under `web-app/` to `main`, and the workflow tests it, builds and scans the image, pushes it and tells Dokploy to run it. Terraform decides how the app runs, CI which version.
 
-**Running inside WSL:** Windows has no route to the VMs. A local forwarder, `local/forward.sh` (gitignored, since only WSL setups need it), fixes that: forwarding `localhost:3000` to Dokploy and `localhost:8081` to Traefik makes Dokploy and every app with a `*.localhost` domain reachable from Windows, e.g. `http://roster.localhost:8081` (see DESIGN.md). `local/bootstrap.sh` runs it if present, and `local/teardown.sh` stops it.
+**Adding an app** with secrets from OpenBao: [APP-PROJECT-SETUP.md](APP-PROJECT-SETUP.md).
 
-### If multipass itself breaks (macOS)
+**Scaling** workers: set `worker_count` in `terraform/gcp/terraform.tfvars` and run `./up.sh`. New workers join the swarm by themselves and get a CI runner.
 
-If every `multipass` command fails with `cannot connect to the multipass socket`, the daemon is probably crash-looping on a VM whose suspend state can't be restored. Both scripts need sudo.
-
-```
-local/multipass-unsuspend.sh   # drop suspend state, keep all VMs and disks - try this first
-local/multipass-reset.sh       # wipe ALL multipass VMs and state, restart the daemon (-y to skip prompt)
-```
-
-## What to expect right now
-
-After `local/bootstrap.sh N` finishes (or `remote/bootstrap.sh`, on your servers instead of VMs):
-
-- `N + 1` Multipass VMs running (`dokploy-control-plane`, `dokploy-worker-1..N`)
-- A Docker Swarm with the control plane as manager and all `N` workers `Ready`/`Active` (`docker node ls` on the control plane)
-- Dokploy reachable at `http://<control-plane-ip>:3000` (remote: only through an ssh tunnel, whose command `remote/00-install-dokploy.sh` prints), logged in with the admin account from `.dokploy-admin.env`
-- A container registry at `127.0.0.1:5000` on every node, pinned to the control plane and registered in Dokploy as `cluster-registry`. Its credentials are in `.state/<target>/registry-credentials` (gitignored).
-- One self-hosted GitHub Actions runner per worker, if a PAT is configured (see "Optional: CI runners" above). Target them with `runs-on: [self-hosted, dokploy]`.
-- The example web app, **Roster** ([`web-app/`](./web-app)), in the Dokploy project `roster`: 2 replicas, on the workers, of the image `127.0.0.1:5000/roster:<commit>`, plus its own PostgreSQL and Redis services (Redis holds the sign-in rate limiter's counters). It's at `http://roster.<control-plane-ip>.sslip.io` wherever the control plane is reachable, or `http://roster.localhost:8081` from Windows (while `local/forward.sh` runs). The first admin's password is in `.state/<target>/web-app-credentials` (gitignored). To redeploy after committing a change to `web-app/`, run `<target>/07-deploy-web-app.sh`; it builds and pushes the new image and rolls the replicas over one by one.
-- `06-deploy-core-services.sh` is still a stub: the rest of the core service set (Trivy scanning) is designed but not yet implemented; see PLAN.md's "Core services" checklist.
-
-The registry, the runners and OpenBao run from compose files in [`stacks/`](./stacks), deployed as Dokploy Compose resources of type Stack (see DESIGN.md "Services as code"). The web app is a Dokploy application instead (DESIGN.md, "Web app delivery").
-
-`local/teardown.sh` returns you to a clean slate — no VMs, no stale local credentials. For a remote cluster, destroy the servers however you created them, then run `remote/forget.sh`.
+**Debugging a node:** its setup log is `sudo journalctl -u google-startup-scripts` on it.

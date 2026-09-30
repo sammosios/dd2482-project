@@ -1,11 +1,11 @@
 # CI for the example web app (web-app/, "Roster"), run on the cluster's own
-# self-hosted runners (04-setup-ci-runner.sh): it tests the app, builds its
+# self-hosted runners (terraform/services): it tests the app, builds its
 # image and gates the image on a Trivy scan, and puts the test results and
-# every Trivy finding on the run's summary page (.github/scripts/).
-# Deploying is Dokploy's job.
-# Handing it new images (push to the cluster registry, then tell Dokploy)
-# comes later: that needs credentials that change with every rebuild, so
-# the runners have to be handed them first.
+# every Trivy finding on the run's summary page (.github/scripts/). On main,
+# it then pushes the image to the cluster registry and points Dokploy's app
+# at it: Terraform owns how the app runs, CI owns which image (DESIGN.md
+# "Web app delivery"). The secrets and variables it uses are set by
+# terraform/apps/roster.
 name: Web app CI
 
 on:
@@ -72,10 +72,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           # Full history: the tag is the last commit that touched web-app/,
-          # as in 07-deploy-web-app.sh, and a shallow clone would hide it.
+          # which up.sh also computes, and a shallow clone would hide it.
           fetch-depth: 0
       - name: Name the image
-        run: echo "IMAGE=127.0.0.1:5000/roster:$(git log -1 --format=%h -- web-app)" >>"$GITHUB_ENV"
+        run: echo "IMAGE=${{ vars.REGISTRY_ADDR || '127.0.0.1:5000' }}/roster:$(git log -1 --format=%h -- web-app)" >>"$GITHUB_ENV"
       # Built by the node's own Docker daemon through the mounted socket, so
       # the build cache outlives the ephemeral runner. Plain docker build
       # rather than setup-buildx-action, which by default builds in a
@@ -110,7 +110,43 @@ jobs:
           --cache-dir /cache --image-src docker --no-progress
           --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1
           "$IMAGE"
-      # Nothing is pushed yet, and the workers' disks are only 15G.
+      # Only main is deployed. The runner's container is thrown away after
+      # the job, and its Docker login with it.
+      - name: Push
+        if: github.ref == 'refs/heads/main'
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          echo "$REGISTRY_PASSWORD" | docker login "${{ vars.REGISTRY_ADDR }}" -u "${{ vars.REGISTRY_USER }}" --password-stdin
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >>"$GITHUB_OUTPUT"
+        id: push
+      # The workers' disks are only 15G; the registry keeps the pushed copy.
       - name: Remove the image
         if: always()
         run: docker image rm "$IMAGE" || true
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+
+  deploy:
+    needs: image
+    if: needs.image.outputs.image != ''
+    runs-on: [self-hosted, dokploy]
+    timeout-minutes: 15
+    # One deploy at a time, and never cancelled halfway.
+    concurrency:
+      group: deploy-roster
+      cancel-in-progress: false
+    env:
+      IMAGE: ${{ needs.image.outputs.image }}
+      DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+      APP_ID: ${{ vars.ROSTER_APP_ID }}
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      REGISTRY_ADDR: ${{ vars.REGISTRY_ADDR }}
+      REGISTRY_USER: ${{ vars.REGISTRY_USER }}
+      REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+      ROSTER_URL: ${{ vars.ROSTER_URL }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Point the app at the new image and deploy it
+        run: .github/scripts/deploy-roster.sh

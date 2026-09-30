@@ -1,0 +1,46 @@
+# The control plane: Dokploy, whose installer creates the swarm, then
+# Dokploy's own setup and what the workers and OpenBao need from this node.
+
+# Never re-run the installer on a node that has Dokploy: it starts with
+# `docker swarm leave --force`, which would throw every worker out.
+if ! docker service inspect dokploy >/dev/null 2>&1; then
+  log "installing Dokploy ${dokploy_version}"
+  apt_quiet
+  # ADVERTISE_ADDR pinned, so Dokploy's own address detection can't pick
+  # the wrong interface (Dokploy#4517).
+  curl -fsSL https://dokploy.com/install.sh \
+    | DOKPLOY_VERSION="${dokploy_version}" ADVERTISE_ADDR="${cp_private_ip}" sh
+  systemctl start apt-daily.timer apt-daily-upgrade.timer
+fi
+
+# Swarm keeps 5 finished tasks per service and node by default, and each
+# finished CI runner container holds everything its job wrote (DESIGN.md,
+# "CI runners"): keep one.
+docker swarm update --task-history-limit 1 >/dev/null
+
+token="$(docker swarm join-token -q worker)"
+if [ "$(read_join_token 2>/dev/null || true)" != "$token" ]; then
+  log "publishing the worker join token"
+  write_join_token "$token"
+fi
+
+# OpenBao's two Swarm secrets (terraform/platform deploys it). The unseal
+# key is made here and never leaves this node: a restarted OpenBao task
+# unseals itself with it. The password is the one OpenBao's
+# self-initialization gives Terraform's user, from Secret Manager.
+if ! docker secret inspect openbao-unseal-key >/dev/null 2>&1; then
+  log "creating OpenBao's unseal key"
+  head -c 32 /dev/urandom | docker secret create openbao-unseal-key - >/dev/null
+fi
+if ! docker secret inspect openbao-terraform-password >/dev/null 2>&1; then
+  log "handing OpenBao the Terraform user's password"
+  read_secret "${openbao_password_secret}" | tr -d '\n' | docker secret create openbao-terraform-password - >/dev/null
+fi
+
+cat >/usr/local/sbin/dokploy-bootstrap <<'PY'
+${dokploy_bootstrap}
+PY
+chmod 755 /usr/local/sbin/dokploy-bootstrap
+dokploy-bootstrap "${admin_secret}" "${api_key_secret}" "${dokploy_host}" "${acme_email}"
+
+log "control plane ready"

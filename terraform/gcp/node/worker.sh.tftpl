@@ -1,0 +1,31 @@
+# A worker: joins the control plane's swarm once the control plane has
+# published a join token, which takes a few minutes after both boot.
+
+if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" = active ]; then
+  log "already part of the swarm"
+  exit 0
+fi
+
+log "waiting for the control plane's join token"
+for _ in $(seq 1 180); do
+  if token="$(read_join_token 2>/dev/null)" && [ -n "$token" ]; then
+    break
+  fi
+  token=""
+  sleep 10
+done
+if [ -z "$token" ]; then
+  log "no join token after 30 minutes; the next boot tries again"
+  exit 1
+fi
+
+# The control plane may still be starting its swarm: retry the join.
+for _ in $(seq 1 30); do
+  if docker swarm join --token "$token" "${cp_private_ip}:2377"; then
+    log "joined the swarm"
+    exit 0
+  fi
+  sleep 10
+done
+log "could not join the swarm at ${cp_private_ip}:2377"
+exit 1

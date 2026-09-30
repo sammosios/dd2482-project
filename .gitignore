@@ -1,18 +1,15 @@
-.dokploy-admin.env
-.github-runner.env
-remote/hosts.env
-forward.sh
-# Per-target cluster state (lib/common.sh).
-.state/
-# Its pre-.state locations, moved into .state/local/ by local/lib/target.sh.
-.dokploy-api-key
-.forward.pid
-.registry-credentials
-.openbao-init.json
-.openbao-init.json.stale
-.web-app-credentials
-# Terraform state and local variables.
+# Terraform: provider caches, the variable files that hold tokens, and state
+# (only terraform/bootstrap keeps a local one; the other stages keep theirs
+# in the GCS bucket it creates).
 terraform/**/.terraform/
+terraform/**/terraform.tfvars
 terraform/**/*.tfstate
 terraform/**/*.tfstate.*
-terraform/**/terraform.tfvars
+# Credentials files and state of the old script chain, which may still be on
+# a machine that ran it.
+.dokploy-admin.env
+.github-runner.env
+.state/
+local/forward.sh
+# Python bytecode.
+__pycache__/
