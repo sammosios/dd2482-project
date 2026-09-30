@@ -1,0 +1,6 @@
+# Copy to terraform.tfvars (gitignored) and fill in. Everything else has a
+# default in variables.tf that can be overridden here too.
+ssh_public_key = "ssh-ed25519 AAAA... you@host"
+
+# zone              = "europe-north1-b"  # if europe-north1-a is out of capacity
+# ssh_source_ranges = ["198.51.100.7/32"]

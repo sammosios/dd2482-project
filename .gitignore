@@ -11,3 +11,8 @@ forward.sh
 .openbao-init.json
 .openbao-init.json.stale
 .web-app-credentials
+# Terraform state and local variables.
+terraform/**/.terraform/
+terraform/**/*.tfstate
+terraform/**/*.tfstate.*
+terraform/**/terraform.tfvars
