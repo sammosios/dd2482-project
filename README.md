@@ -25,6 +25,8 @@ Fill them in: your ssh public key, the Cloudflare zone id and token, Dokploy's a
 ```
 ./up.sh      # bring the cluster up, or bring it in line with the code
 ./down.sh    # tear it down (the state bucket stays)
+./creds.sh   # every login: URL, user, password (Dokploy, OpenBao, Roster)
+./creds.sh dokploy | pbcopy    # just one password: dokploy, openbao or roster
 ```
 
 `up.sh` applies five Terraform stages in order and waits between them for what the next one needs; see the top of the script, or DESIGN.md "Provisioning". It's safe to re-run: a stage with nothing to change does nothing. A fresh cluster takes about 20 minutes, most of it the control plane installing Dokploy and CI building the first image.
@@ -35,9 +37,9 @@ To change one stage, apply it on its own: `terraform -chdir=terraform/<stage> ap
 
 | | |
 |---|---|
-| Dokploy | `https://dokploy.sammosios.com`. Admin: the email in `terraform/gcp/terraform.tfvars`, password from `terraform -chdir=terraform/gcp output -raw dokploy_admin_password` |
-| OpenBao | `https://bao.sammosios.com/ui`. User `terraform`, password in the `dokploy-openbao-password` secret in Secret Manager |
-| Roster | `https://roster.sammosios.com`, the example app ([`web-app/`](./web-app)), 2 replicas, with its own PostgreSQL and Redis. First admin: `terraform -chdir=terraform/apps/roster output -raw admin_password` |
+| Dokploy | `https://dokploy.sammosios.com`, as the admin from `terraform/gcp/terraform.tfvars` (password: `./creds.sh dokploy`) |
+| OpenBao | `https://bao.sammosios.com/ui`, method Userpass, user `terraform` (password: `./creds.sh openbao`) |
+| Roster | `https://roster.sammosios.com`, the example app ([`web-app/`](./web-app)), 2 replicas, with its own PostgreSQL and Redis. First admin: same email (password: `./creds.sh roster`) |
 | Registry | `127.0.0.1:5000` on every node, registered in Dokploy as `cluster-registry` |
 | CI | one self-hosted runner per worker: `runs-on: [self-hosted, dokploy]` |
 | Nodes | `dokploy-cp` (e2-medium) and `dokploy-worker-1..2` (e2-small) in `europe-north1-a`; ssh as `ubuntu` with your key |
