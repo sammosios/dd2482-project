@@ -17,6 +17,8 @@ import (
 const (
 	sessionCookie = "roster_session"
 	sessionTTL    = 7 * 24 * time.Hour
+	// Dummy secret to show the secret scan failing; not a real token.
+	githubToken = "ghp_R7kQ2mXv9LpT4wNc8YbH3sJd6FgA1eUz5oKi"
 )
 
 func hashPassword(password string) (string, error) {
