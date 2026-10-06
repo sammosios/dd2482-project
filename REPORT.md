@@ -8,11 +8,11 @@ We built a small self-hosted Platform-as-a-Service: a Docker Swarm cluster on Go
 
 | Feature | How it is shown |
 |---|---|
-| A PaaS on a multi-node cluster | Dokploy on a 3-node Swarm (1 manager, 2 workers); every service is deployed and visible through it, at `https://dokploy.sammosios.com` |
+| A PaaS on a multi-node cluster | Dokploy on a 3-node Swarm (1 manager, 2 workers); every service is deployed and visible through it, at <https://dokploy.sammosios.com> |
 | Self-hosted CI | GitHub Actions runners that run inside the cluster, one per worker |
-| An example app with a database | Roster (Go + htmx), 2 replicas with PostgreSQL and Redis, at `https://roster.sammosios.com` |
+| An example app with a database | Roster (Go + htmx), 2 replicas with PostgreSQL and Redis, at <https://roster.sammosios.com> |
 | A secrets vault | OpenBao, which Dokploy queries at deploy time, so apps never hold vault credentials |
-| Security scanning | Trivy gates every image in CI: HIGH/CRITICAL findings with a fix fail the build |
+| Security scanning | Trivy gates CI twice: a committed secret anywhere in the repository stops the image from being built, and HIGH/CRITICAL vulnerabilities with a fix fail the built image |
 
 The sixth, implicit requirement is **reproducibility**: everything above, including VMs, DNS, certificates and every generated password, comes from the repository, with no manual steps. Section 5 is honest about how close we got.
 
@@ -40,7 +40,9 @@ The sixth, implicit requirement is **reproducibility**: everything above, includ
 
 **Provisioning.** `up.sh` applies the stages in order and waits between them for what the next one needs. The VMs set themselves up from GCE startup scripts: they install Docker and Dokploy, form the swarm (workers fetch the join token through Google Secret Manager), and the control plane creates Dokploy's first admin and an API key through Dokploy's own sign-up endpoints, then puts Dokploy on its domain. The later stages read that key from Secret Manager, so the operator's machine never needs ssh. A fresh cluster takes about 20 minutes, mostly Dokploy's install and the first CI build.
 
-**Delivery.** A push to `main` that touches the app runs CI on the in-cluster runners: tests, image build, a Trivy report and gate, a push to the cluster registry tagged with the commit, then Dokploy's API is told to run the new image. The job waits until the app answers. On a fresh cluster, `up.sh` triggers the same workflow for the first image, so there is exactly one way an image reaches production.
+**Delivery.** A push to `main` that touches the app runs CI on the in-cluster runners: tests and a Trivy secret scan of the whole repository in parallel, then, only if both pass, the image build, a Trivy report and gate, a push to the cluster registry tagged with the commit, then Dokploy's API is told to run the new image. The job waits until the app answers. On a fresh cluster, `up.sh` triggers the same workflow for the first image, so there is exactly one way an image reaches production.
+
+To show the secret scan working, we committed a dummy GitHub token into the app's source (`web-app/auth.go`) and pushed it to `main`. In [that run](https://github.com/sammosios/dd2482-project/actions/runs/37439290067) the tests passed, the secret scan reported a CRITICAL "GitHub Personal Access Token" at `web-app/auth.go:21` and failed, and the image and deploy jobs were skipped: nothing was built or deployed. The image scan alone would not have caught it, because it only looks for vulnerable packages, and the token would have been an ordinary string compiled into the binary.
 
 **Secrets.** OpenBao initializes itself on first start (OpenBao 2.7's declarative self-initialization), creating only a login for Terraform; no root token is ever handed out. Terraform then writes each project's secrets and creates, per Dokploy project, a policy, a token and a Dokploy "secrets provider". Apps' environment variables hold references such as `${{vault.bao-roster.roster/app:DATABASE_URL}}`, which Dokploy resolves when it deploys. The CI runners' GitHub token goes the same way.
 
