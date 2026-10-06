@@ -160,7 +160,7 @@ cat <<EOF
    Dokploy   $(gcp_out dokploy_url)
              $(gcp_out dokploy_admin_email), password: terraform -chdir=terraform/gcp output -raw dokploy_admin_password
    OpenBao   $(tf platform output -raw openbao_url)/ui
-             userpass "terraform", password: the dokploy-openbao-password secret in Secret Manager
+             userpass "terraform", password: the dokploy-openbao-password secret in GCP Secret Manager
    Roster    $(tf apps/roster output -raw url)
              $(tf apps/roster output -raw admin_email), password: terraform -chdir=terraform/apps/roster output -raw admin_password
 EOF
