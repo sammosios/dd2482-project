@@ -332,12 +332,14 @@ Shared module: `terraform/modules/project-secrets` (policy, token, Dokploy provi
 ```mermaid
 flowchart LR
   push[push to main<br/>touching web-app/] --> test[test<br/>go vet, go test]
-  test --> image[image<br/>build, Trivy report,<br/>Trivy gate]
+  push --> secrets[secrets<br/>Trivy secret scan<br/>of the repo]
+  test --> image
+  secrets --> image[image<br/>build, Trivy report,<br/>Trivy gate]
   image -->|main only| pushimg[push to<br/>127.0.0.1:5000/roster:commit]
   pushimg --> deploy[deploy<br/>saveDockerProvider,<br/>application.deploy,<br/>wait for /readyz]
 ```
 
-- `.github/workflows/web-app-ci.yml`, all jobs on `[self-hosted, dokploy]`; branches other than `main` stop after the Trivy gate.
+- `.github/workflows/web-app-ci.yml`, all jobs on `[self-hosted, dokploy]`; `test` and `secrets` run in parallel and the image is only built if both pass; branches other than `main` stop after the Trivy gate.
 - The deploy job runs `.github/scripts/deploy-roster.sh` with `DOKPLOY_URL`, `ROSTER_APP_ID`, `ROSTER_URL`, `REGISTRY_ADDR`, `REGISTRY_USER` (Actions variables) and `DOKPLOY_API_KEY`, `REGISTRY_PASSWORD` (Actions secrets), all set by `terraform/apps/roster`.
 - Terraform ignores the app's image (`ignore_changes = [docker]`): **Terraform owns how the app runs, CI owns which image.**
 

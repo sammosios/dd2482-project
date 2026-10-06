@@ -20,7 +20,7 @@ jq -r '
     + (if ($all | length) > 0
        then "❌ \(plural($all | length; "secret")) found"
        else "✅ no secrets found" end)
-    + "\n\nTrivy scanned every tracked file of this commit. Any secret it finds fails the run.\n"
+    + "\n\nTrivy scanned every tracked file of this commit. Any secret it finds fails the run before the image is built.\n"
     + (if ($all | length) > 0
        then "\n| Severity | Rule | File | Line | Match |\n|---|---|---|--:|---|\n"
             + ($all | map("| \(.Severity) | \(.Title | cell) | `\(.Target)` | \(.StartLine) | `\(.Match | cell)` |") | join("\n"))

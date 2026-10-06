@@ -1,6 +1,7 @@
 # CI for the example web app (web-app/, "Roster"), run on the cluster's own
-# self-hosted runners (terraform/services): it tests the app, builds its
-# image and gates the image on a Trivy scan, and puts the test results and
+# self-hosted runners (terraform/services): it tests the app and scans the
+# repo for committed secrets, builds its image only if both pass, gates the
+# image on a Trivy scan, and puts the test results, any secret found and
 # every Trivy finding on the run's summary page (.github/scripts/). On main,
 # it then pushes the image to the cluster registry and points Dokploy's app
 # at it: Terraform owns how the app runs, CI owns which image (DESIGN.md
@@ -64,8 +65,32 @@ jobs:
         if: success() || failure()
         run: '"$GITHUB_WORKSPACE/.github/scripts/test-summary.sh" test.json >>"$GITHUB_STEP_SUMMARY"'
 
+  # Trivy's secret scanner over every tracked file of the commit, the whole
+  # repo and not just web-app/: a token in Terraform or a script fails the
+  # run too. Any secret found stops the image from being built.
+  secrets:
+    runs-on: [self-hosted, dokploy]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # Trivy runs as a container on the node's Docker (as in the image job),
+      # where a bind mount would point at the node's filesystem, not this
+      # job's. So the files go into the container as a tar stream instead:
+      # git archive leaves out .git and anything untracked. The secret
+      # scanner needs no vulnerability database.
+      - name: Scan for secrets
+        run: |
+          cid=$(docker create aquasec/trivy:0.74.0 fs \
+            --scanners secret --no-progress --format json --exit-code 1 /src)
+          trap 'docker rm "$cid" >/dev/null' EXIT
+          git archive --prefix=src/ HEAD | docker cp - "$cid:/"
+          status=0
+          docker start -a "$cid" >trivy-secrets.json || status=$?
+          .github/scripts/secret-summary.sh trivy-secrets.json | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
   image:
-    needs: test
+    needs: [test, secrets]
     runs-on: [self-hosted, dokploy]
     timeout-minutes: 30
     steps:
