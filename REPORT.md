@@ -1,6 +1,6 @@
 # A Self-Hosted PaaS with Dokploy, Built from Code
 
-DD2482 DevOps, project report · Samouil Mosios, Pavlos Spanoudakis · 2026-09-30
+DD2482 DevOps, project report · Samouil Mosios, Pavlos Spanoudakis · 2026-10-08
 
 ## 1. What the project demonstrates
 
@@ -15,6 +15,8 @@ We built a small self-hosted Platform-as-a-Service: a Docker Swarm cluster on Go
 | Security scanning | Trivy gates CI twice: a committed secret anywhere in the repository stops the image from being built, and HIGH/CRITICAL vulnerabilities with a fix fail the built image |
 
 The sixth, implicit requirement is **reproducibility**: everything above, including VMs, DNS, certificates and every generated password, comes from the repository, with no manual steps. Section 5 is honest about how close we got.
+
+To try the running cluster (logins, and what to look at in each service), see [`WALKTHROUGH.md`](./WALKTHROUGH.md).
 
 ## 2. Architecture
 

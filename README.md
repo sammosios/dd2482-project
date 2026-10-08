@@ -1,6 +1,6 @@
 # Self-Hosted PaaS Cluster with Dokploy
 
-A [Dokploy](https://dokploy.com/) cluster on Docker Swarm, on GCP, entirely from Terraform: one command brings up the VMs, the swarm, Dokploy, a container registry, OpenBao for secrets, self-hosted CI runners and an example app, each on its own HTTPS domain. DD2482 project (Samouil Mosios, Pavlos Spanoudakis). What runs where: [`ARCHITECTURE.md`](./ARCHITECTURE.md); why it's built this way: [`DESIGN.md`](./DESIGN.md); the build log: [`PLAN.md`](./PLAN.md).
+A [Dokploy](https://dokploy.com/) cluster on Docker Swarm, on GCP, entirely from Terraform: one command brings up the VMs, the swarm, Dokploy, a container registry, OpenBao for secrets, self-hosted CI runners and an example app, each on its own HTTPS domain. DD2482 project (Samouil Mosios, Pavlos Spanoudakis). What runs where: [`ARCHITECTURE.md`](./ARCHITECTURE.md); why it's built this way: [`DESIGN.md`](./DESIGN.md); the build log: [`PLAN.md`](./PLAN.md). A tour of the running cluster: [`WALKTHROUGH.md`](./WALKTHROUGH.md).
 
 ## Requirements
 
